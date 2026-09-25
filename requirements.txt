@@ -1,0 +1,3 @@
+streamlit
+gigachat
+python-dotenv
