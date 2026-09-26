@@ -32,7 +32,7 @@ if not client_id or not client_secret:
 
 # 1. Интерфейс
 st.set_page_config(page_title="ИИ Файловый Менеджер", page_icon="🗂️")
-st.title("🗂️ ИИ-Агент для поиска файлов")
+st.title("️ ИИ-Агент для поиска файлов")
 st.write("Напишите название файла, и я найду его в архиве.")
 
 DOCS_DIR = "my_documents"
@@ -40,10 +40,10 @@ if not os.path.exists(DOCS_DIR):
     os.makedirs(DOCS_DIR)
 
 # ============================================================
-# 🔐 АДМИН-ПАНЕЛЬ (защищена паролем)
+# 🔐 АДМИН-ПАНЕЛЬ
 # ============================================================
 st.sidebar.markdown("---")
-st.sidebar.header("🔐 Вход для администратора")
+st.sidebar.header(" Вход для администратора")
 
 if "is_admin" not in st.session_state:
     st.session_state.is_admin = False
@@ -59,20 +59,19 @@ if not st.session_state.is_admin:
         else:
             st.sidebar.error("❌ Неверный пароль")
 else:
-    # АДМИН ЗАШЁЛ — показываем панель загрузки
     st.sidebar.success("✅ Вы вошли как администратор")
     
-    if st.sidebar.button("🚪 Выйти"):
+    if st.sidebar.button(" Выйти"):
         st.session_state.is_admin = False
         st.rerun()
     
     st.sidebar.markdown("---")
-    st.sidebar.header(" Загрузка файлов в архив")
+    st.sidebar.header("📤 Загрузка файлов в архив")
     
     uploaded_files = st.sidebar.file_uploader(
         "Выберите файлы",
         accept_multiple_files=True,
-        type=["pdf", "txt", "doc", "docx", "xls", "xlsx", "jpg", "png", "zip", "rar"]
+        type=["pdf", "txt", "doc", "docx", "xls", "xlsx", "jpg", "png", "zip", "rar", "pptx", "csv"]
     )
     
     if uploaded_files:
@@ -85,7 +84,6 @@ else:
             else:
                 st.sidebar.info(f"⚠️ {uploaded_file.name} уже есть")
     
-    # Список файлов
     files_in_archive = [f for f in os.listdir(DOCS_DIR) if os.path.isfile(os.path.join(DOCS_DIR, f))]
     if files_in_archive:
         st.sidebar.markdown(f"**📁 В архиве ({len(files_in_archive)}):**")
@@ -103,49 +101,107 @@ else:
 st.sidebar.markdown("---")
 
 # ============================================================
-# 2. Поиск файлов
+# 🔍 ФУНКЦИИ РАБОТЫ С АРХИВОМ
 # ============================================================
-def search_file_by_name(query: str) -> str:
+def get_archive_files_list() -> list:
+    """Возвращает список всех файлов в архиве."""
     if not os.path.exists(DOCS_DIR):
-        return "Папка пуста."
+        return []
+    return [f for f in os.listdir(DOCS_DIR) if os.path.isfile(os.path.join(DOCS_DIR, f))]
+
+
+def search_file_by_name(query: str) -> str:
+    """Ищет файлы по частичному совпадению названия."""
+    if not os.path.exists(DOCS_DIR):
+        return "Архив пуст."
+    
     matched = []
     for root, dirs, files in os.walk(DOCS_DIR):
         for f in files:
             if query.lower() in f.lower():
                 matched.append(os.path.relpath(os.path.join(root, f), DOCS_DIR))
-    return f"Найдены: {', '.join(matched)}" if matched else f"Файлы с '{query}' не найдены."
+    
+    if matched:
+        return f"Найдены файлы: {', '.join(matched)}"
+    else:
+        return "Файлы не найдены."
 
-# 3. Клиент GigaChat
+
+# ============================================================
+# 🤖 КЛИЕНТ GIGACHAT
+# ============================================================
 @st.cache_resource
 def get_client():
     return GigaChat(credentials=client_secret, verify_ssl_certs=False)
 
 client = get_client()
 
-SYSTEM_INSTRUCTION = (
-    "Вы — ассистент файлового архива. "
-    "Используйте маркер [DOWNLOAD:имя_файла] для каждого найденного файла. "
-    "Пример: Вот ваш файл: [DOWNLOAD:report.pdf]"
-)
+# ✅ УСИЛЕННЫЙ СИСТЕМНЫЙ ПРОМПТ
+def build_system_instruction():
+    """Строит промпт с реальным списком файлов архива."""
+    files_list = get_archive_files_list()
+    
+    if files_list:
+        files_str = "\n".join(f"- {f}" for f in files_list)
+        files_section = f"""
+ДОСТУПНЫЕ ФАЙЛЫ В АРХИВЕ (ТОЛЬКО ИХ МОЖНО УПОМИНАТЬ):
+{files_str}
+"""
+    else:
+        files_section = """
+ВНИМАНИЕ: АРХИВ ПУСТ. Файлов нет. Не упоминай никакие файлы.
+"""
+    
+    return f"""Ты — ассистент файлового архива.
+
+{files_section}
+
+ПРАВИЛА:
+1. Используй маркер [DOWNLOAD:имя_файла] ТОЛЬКО для файлов из списка выше.
+2. СТРОГО ЗАПРЕЩЕНО выдумывать файлы, которых нет в списке.
+3. Если пользователь ищет файл, которого нет в архиве — честно скажи об этом.
+4. Если архив пуст — скажи, что файлов пока нет.
+5. Отвечай кратко и по делу.
+
+Пример правильного ответа:
+"Вот ваш файл: [DOWNLOAD:report.pdf]"
+
+Пример неправильного ответа (НЕ ДЕЛАЙ ТАК):
+"Вот файлы: [DOWNLOAD:отчет_2025.pdf], [DOWNLOAD:презентация.pptx]" — если их нет в списке выше."""
+
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# ============================================================
+# 🎨 РЕНДЕРИНГ СООБЩЕНИЙ (без пугающих предупреждений)
+# ============================================================
 def render_message(text: str, prefix: str = ""):
+    """Рендерит текст и кнопки скачивания. Несуществующие файлы просто игнорируются."""
     parts = re.split(r'\[DOWNLOAD:([^\]]+)\]', text)
+    
     for i, part in enumerate(parts):
         if i % 2 == 0:
+            # Обычный текст
             if part.strip():
                 st.markdown(part)
         else:
+            # Имя файла из маркера
             filename = part.strip()
             filepath = os.path.join(DOCS_DIR, filename)
             key = f"{prefix}dl_{filename}_{i}"
+            
             if os.path.exists(filepath):
+                # Файл существует — показываем кнопку
                 with open(filepath, "rb") as f:
-                    st.download_button(f"📥 Скачать: {filename}", f.read(), filename, key=key)
-            else:
-                st.warning(f"Файл '{filename}' не найден в архиве.")
+                    st.download_button(
+                        label=f" Скачать: {filename}",
+                        data=f.read(),
+                        file_name=filename,
+                        key=key
+                    )
+            # Если файла нет — просто НЕ показываем ничего (никаких warning!)
+
 
 def extract_text(response):
     if hasattr(response, 'messages') and response.messages:
@@ -156,35 +212,5 @@ def extract_text(response):
         return response.choices[0].message.content
     return str(response)
 
-# История чата
-for idx, msg in enumerate(st.session_state.messages):
-    with st.chat_message(msg["role"]):
-        if msg["role"] == "assistant" and "[DOWNLOAD:" in msg["content"]:
-            render_message(msg["content"], f"hist{idx}_")
-        else:
-            st.markdown(msg["content"])
-
-# Ввод пользователя
-if q := st.chat_input("Например: найди отчёт по продажам..."):
-    st.session_state.messages.append({"role": "user", "content": q})
-    with st.chat_message("user"):
-        st.markdown(q)
-    
-    with st.chat_message("assistant"):
-        try:
-            result = search_file_by_name(q)
-            prompt = f"Запрос пользователя: '{q}'. Результат поиска в архиве: {result}. Сформируй понятный ответ."
-            
-            msgs = [ChatMessage(role="system", content=SYSTEM_INSTRUCTION)]
-            for m in st.session_state.messages:
-                msgs.append(ChatMessage(role=m["role"], content=m["content"]))
-            msgs.append(ChatMessage(role="user", content=prompt))
-            
-            payload = ChatCompletionRequest(model="GigaChat-3-Ultra", messages=msgs, temperature=0.3)
-            response = client.chat.create(payload)
-            text = extract_text(response)
-            
-            render_message(text, "new_")
-            st.session_state.messages.append({"role": "assistant", "content": text})
-        except Exception as e:
-            st.error(f"Ошибка: {e}")
+# ============================================================
+# 💬 ИСТОРИЯ
