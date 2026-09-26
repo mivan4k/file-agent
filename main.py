@@ -44,7 +44,7 @@ if not os.path.exists(DOCS_DIR):
     os.makedirs(DOCS_DIR)
 
 st.sidebar.markdown("---")
-st.sidebar.header("🔐 Вход для администратора")
+st.sidebar.header(" Вход для администратора")
 
 if "is_admin" not in st.session_state:
     st.session_state.is_admin = False
@@ -58,7 +58,7 @@ if not st.session_state.is_admin:
             st.sidebar.success("✅ Вход выполнен!")
             st.rerun()
         else:
-            st.sidebar.error("❌ Неверный пароль")
+            st.sidebar.error(" Неверный пароль")
 else:
     st.sidebar.success("✅ Вы вошли как администратор")
 
@@ -93,7 +93,7 @@ else:
     else:
         st.sidebar.warning("Архив пуст")
 
-    if st.sidebar.button("️ Очистить архив"):
+    if st.sidebar.button("🗑️ Очистить архив"):
         for f in os.listdir(DOCS_DIR):
             os.remove(os.path.join(DOCS_DIR, f))
         st.sidebar.success("Архив очищен!")
@@ -108,20 +108,17 @@ def get_archive_files_list():
     return [f for f in os.listdir(DOCS_DIR) if os.path.isfile(os.path.join(DOCS_DIR, f))]
 
 
-def search_file_by_name(query: str) -> str:
+def search_file_by_name(query: str) -> list:
     if not os.path.exists(DOCS_DIR):
-        return "Архив пуст."
-
+        return []
+    
     matched = []
     for root, dirs, files in os.walk(DOCS_DIR):
         for f in files:
             if query.lower() in f.lower():
                 matched.append(os.path.relpath(os.path.join(root, f), DOCS_DIR))
-
-    if matched:
-        return f"Найдены файлы: {', '.join(matched)}"
-    else:
-        return "Файлы не найдены."
+    
+    return matched
 
 
 @st.cache_resource
@@ -138,12 +135,12 @@ def build_system_instruction():
     if files_list:
         files_str = "\n".join(f"- {f}" for f in files_list)
         files_section = f"""
-ДОСТУПНЫЕ ФАЙЛЫ В АРХИВЕ (ТОЛЬКО ИХ МОЖНО УПОМИНАТЬ):
+ДОСТУПНЫЕ ФАЙЛЫ В АРХИВЕ:
 {files_str}
 """
     else:
         files_section = """
-ВНИМАНИЕ: АРХИВ ПУСТ. Файлов нет. Не упоминай никакие файлы.
+ВНИМАНИЕ: АРХИВ ПУСТ. Файлов нет.
 """
 
     return f"""Ты — ассистент файлового архива.
@@ -151,17 +148,16 @@ def build_system_instruction():
 {files_section}
 
 ПРАВИЛА:
-1. Используй маркер [DOWNLOAD:имя_файла] ТОЛЬКО для файлов из списка выше.
-2. СТРОГО ЗАПРЕЩЕНО выдумывать файлы, которых нет в списке.
-3. Если пользователь ищет файл, которого нет в архиве — честно скажи об этом.
-4. Если архив пуст — скажи, что файлов пока нет.
-5. Отвечай кратко и по делу.
+1. Отвечай кратко и по делу.
+2. Если файлы найдены — просто подтверди это текстом.
+3. Если файлов нет — скажи, что ничего не найдено.
+4. НЕ используй маркеры [DOWNLOAD:...] — кнопки создаются автоматически.
 
-Пример правильного ответа:
-"Вот ваш файл: [DOWNLOAD:report.pdf]"
+Пример ответа при найденных файлах:
+"Нашёл для вас следующие файлы:"
 
-Пример неправильного ответа (НЕ ДЕЛАЙ ТАК):
-"Вот файлы: [DOWNLOAD:отчет_2025.pdf], [DOWNLOAD:презентация.pptx]" — если их нет в списке выше."""
+Пример ответа при отсутствии файлов:
+"По вашему запросу ничего не найдено в архиве.""""
 
 
 if "messages" not in st.session_state:
@@ -200,6 +196,21 @@ def extract_text(response):
     return str(response)
 
 
+def render_download_buttons(files: list, prefix: str = ""):
+    for idx, filename in enumerate(files):
+        filepath = os.path.join(DOCS_DIR, filename)
+        key = f"{prefix}auto_dl_{filename}_{idx}"
+        
+        if os.path.exists(filepath):
+            with open(filepath, "rb") as f:
+                st.download_button(
+                    label=f"📥 Скачать: {filename}",
+                    data=f.read(),
+                    file_name=filename,
+                    key=key
+                )
+
+
 for idx, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
         if msg["role"] == "assistant" and "[DOWNLOAD:" in msg["content"]:
@@ -215,13 +226,21 @@ if q := st.chat_input("Например: найди отчёт по продаж
 
     with st.chat_message("assistant"):
         try:
-            search_result = search_file_by_name(q)
+            found_files = search_file_by_name(q)
             system_prompt = build_system_instruction()
 
-            user_prompt = f"""Запрос пользователя: '{q}'
-Результат локального поиска: {search_result}
+            if found_files:
+                files_str = "\n".join(f"- {f}" for f in found_files)
+                user_prompt = f"""Запрос пользователя: '{q}'
+Найдено файлов: {len(found_files)}
+{files_str}
 
-Сформируй ответ. Помни: упоминай только файлы из списка доступных!"""
+Подтверди находку текстом."""
+            else:
+                user_prompt = f"""Запрос пользователя: '{q}'
+Файлы не найдены.
+
+Скажи, что ничего не найдено."""
 
             msgs = [ChatMessage(role="system", content=system_prompt)]
             for m in st.session_state.messages:
@@ -237,7 +256,13 @@ if q := st.chat_input("Например: найди отчёт по продаж
             response = client.chat.create(payload)
             text = extract_text(response)
 
-            render_message(text, "new_")
+            st.markdown(text)
+            
+            if found_files:
+                st.markdown("---")
+                st.markdown(f"**📎 Найдено файлов: {len(found_files)}**")
+                render_download_buttons(found_files, "new_")
+            
             st.session_state.messages.append({"role": "assistant", "content": text})
 
         except Exception as e:
