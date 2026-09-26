@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from gigachat import GigaChat
 from gigachat.models import ChatCompletionRequest, ChatMessage
 
-# 0. Загрузка ключей
+
 def get_credentials():
     try:
         client_id = st.secrets["GIGACHAT_CLIENT_ID"]
@@ -14,15 +14,20 @@ def get_credentials():
         return client_id, client_secret, admin_password
     except (KeyError, FileNotFoundError):
         pass
-    
+
     load_dotenv(dotenv_path="config.env")
     raw_id = os.getenv("GIGACHAT_CLIENT_ID")
     raw_secret = os.getenv("GIGACHAT_CLIENT_SECRET")
-    
+
     if not raw_id or not raw_secret:
         return None, None, None
-    
-    return raw_id.strip().strip("'\""), raw_secret.strip().strip("'\""), ""
+
+    client_id = raw_id.strip().strip("'\"")
+    client_secret = raw_secret.strip().strip("'\"")
+    admin_password = os.getenv("ADMIN_PASSWORD", "")
+
+    return client_id, client_secret, admin_password
+
 
 client_id, client_secret, admin_password = get_credentials()
 
@@ -30,27 +35,23 @@ if not client_id or not client_secret:
     st.error("Ошибка: Ключи GigaChat не найдены!")
     st.stop()
 
-# 1. Интерфейс
-st.set_page_config(page_title="ИИ Файловый Менеджер", page_icon="🗂️")
-st.title("️ ИИ-Агент для поиска файлов")
+st.set_page_config(page_title="ИИ Файловый Менеджер", page_icon="🗂️", layout="wide")
+st.title("🗂️ ИИ-Агент для поиска файлов")
 st.write("Напишите название файла, и я найду его в архиве.")
 
 DOCS_DIR = "my_documents"
 if not os.path.exists(DOCS_DIR):
     os.makedirs(DOCS_DIR)
 
-# ============================================================
-# 🔐 АДМИН-ПАНЕЛЬ
-# ============================================================
 st.sidebar.markdown("---")
-st.sidebar.header(" Вход для администратора")
+st.sidebar.header("🔐 Вход для администратора")
 
 if "is_admin" not in st.session_state:
     st.session_state.is_admin = False
 
 if not st.session_state.is_admin:
     password_input = st.sidebar.text_input("Введите пароль администратора:", type="password")
-    
+
     if st.sidebar.button("Войти"):
         if password_input == admin_password:
             st.session_state.is_admin = True
@@ -60,20 +61,20 @@ if not st.session_state.is_admin:
             st.sidebar.error("❌ Неверный пароль")
 else:
     st.sidebar.success("✅ Вы вошли как администратор")
-    
-    if st.sidebar.button(" Выйти"):
+
+    if st.sidebar.button("🚪 Выйти"):
         st.session_state.is_admin = False
         st.rerun()
-    
+
     st.sidebar.markdown("---")
     st.sidebar.header("📤 Загрузка файлов в архив")
-    
+
     uploaded_files = st.sidebar.file_uploader(
         "Выберите файлы",
         accept_multiple_files=True,
         type=["pdf", "txt", "doc", "docx", "xls", "xlsx", "jpg", "png", "zip", "rar", "pptx", "csv"]
     )
-    
+
     if uploaded_files:
         for uploaded_file in uploaded_files:
             filepath = os.path.join(DOCS_DIR, uploaded_file.name)
@@ -83,7 +84,7 @@ else:
                 st.sidebar.success(f"✅ {uploaded_file.name}")
             else:
                 st.sidebar.info(f"⚠️ {uploaded_file.name} уже есть")
-    
+
     files_in_archive = [f for f in os.listdir(DOCS_DIR) if os.path.isfile(os.path.join(DOCS_DIR, f))]
     if files_in_archive:
         st.sidebar.markdown(f"**📁 В архиве ({len(files_in_archive)}):**")
@@ -91,8 +92,8 @@ else:
             st.sidebar.text(f"  • {fname}")
     else:
         st.sidebar.warning("Архив пуст")
-    
-    if st.sidebar.button("🗑️ Очистить архив"):
+
+    if st.sidebar.button("️ Очистить архив"):
         for f in os.listdir(DOCS_DIR):
             os.remove(os.path.join(DOCS_DIR, f))
         st.sidebar.success("Архив очищен!")
@@ -100,47 +101,40 @@ else:
 
 st.sidebar.markdown("---")
 
-# ============================================================
-# 🔍 ФУНКЦИИ РАБОТЫ С АРХИВОМ
-# ============================================================
-def get_archive_files_list() -> list:
-    """Возвращает список всех файлов в архиве."""
+
+def get_archive_files_list():
     if not os.path.exists(DOCS_DIR):
         return []
     return [f for f in os.listdir(DOCS_DIR) if os.path.isfile(os.path.join(DOCS_DIR, f))]
 
 
 def search_file_by_name(query: str) -> str:
-    """Ищет файлы по частичному совпадению названия."""
     if not os.path.exists(DOCS_DIR):
         return "Архив пуст."
-    
+
     matched = []
     for root, dirs, files in os.walk(DOCS_DIR):
         for f in files:
             if query.lower() in f.lower():
                 matched.append(os.path.relpath(os.path.join(root, f), DOCS_DIR))
-    
+
     if matched:
         return f"Найдены файлы: {', '.join(matched)}"
     else:
         return "Файлы не найдены."
 
 
-# ============================================================
-# 🤖 КЛИЕНТ GIGACHAT
-# ============================================================
 @st.cache_resource
 def get_client():
     return GigaChat(credentials=client_secret, verify_ssl_certs=False)
 
+
 client = get_client()
 
-# ✅ УСИЛЕННЫЙ СИСТЕМНЫЙ ПРОМПТ
+
 def build_system_instruction():
-    """Строит промпт с реальным списком файлов архива."""
     files_list = get_archive_files_list()
-    
+
     if files_list:
         files_str = "\n".join(f"- {f}" for f in files_list)
         files_section = f"""
@@ -151,7 +145,7 @@ def build_system_instruction():
         files_section = """
 ВНИМАНИЕ: АРХИВ ПУСТ. Файлов нет. Не упоминай никакие файлы.
 """
-    
+
     return f"""Ты — ассистент файлового архива.
 
 {files_section}
@@ -173,34 +167,27 @@ def build_system_instruction():
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# ============================================================
-# 🎨 РЕНДЕРИНГ СООБЩЕНИЙ (без пугающих предупреждений)
-# ============================================================
+
 def render_message(text: str, prefix: str = ""):
-    """Рендерит текст и кнопки скачивания. Несуществующие файлы просто игнорируются."""
     parts = re.split(r'\[DOWNLOAD:([^\]]+)\]', text)
-    
+
     for i, part in enumerate(parts):
         if i % 2 == 0:
-            # Обычный текст
             if part.strip():
                 st.markdown(part)
         else:
-            # Имя файла из маркера
             filename = part.strip()
             filepath = os.path.join(DOCS_DIR, filename)
             key = f"{prefix}dl_{filename}_{i}"
-            
+
             if os.path.exists(filepath):
-                # Файл существует — показываем кнопку
                 with open(filepath, "rb") as f:
                     st.download_button(
-                        label=f" Скачать: {filename}",
+                        label=f"📥 Скачать: {filename}",
                         data=f.read(),
                         file_name=filename,
                         key=key
                     )
-            # Если файла нет — просто НЕ показываем ничего (никаких warning!)
 
 
 def extract_text(response):
@@ -212,5 +199,46 @@ def extract_text(response):
         return response.choices[0].message.content
     return str(response)
 
-# ============================================================
-# 💬 ИСТОРИЯ
+
+for idx, msg in enumerate(st.session_state.messages):
+    with st.chat_message(msg["role"]):
+        if msg["role"] == "assistant" and "[DOWNLOAD:" in msg["content"]:
+            render_message(msg["content"], f"hist{idx}_")
+        else:
+            st.markdown(msg["content"])
+
+
+if q := st.chat_input("Например: найди отчёт по продажам..."):
+    st.session_state.messages.append({"role": "user", "content": q})
+    with st.chat_message("user"):
+        st.markdown(q)
+
+    with st.chat_message("assistant"):
+        try:
+            search_result = search_file_by_name(q)
+            system_prompt = build_system_instruction()
+
+            user_prompt = f"""Запрос пользователя: '{q}'
+Результат локального поиска: {search_result}
+
+Сформируй ответ. Помни: упоминай только файлы из списка доступных!"""
+
+            msgs = [ChatMessage(role="system", content=system_prompt)]
+            for m in st.session_state.messages:
+                msgs.append(ChatMessage(role=m["role"], content=m["content"]))
+            msgs.append(ChatMessage(role="user", content=user_prompt))
+
+            payload = ChatCompletionRequest(
+                model="GigaChat-3-Ultra",
+                messages=msgs,
+                temperature=0.3
+            )
+
+            response = client.chat.create(payload)
+            text = extract_text(response)
+
+            render_message(text, "new_")
+            st.session_state.messages.append({"role": "assistant", "content": text})
+
+        except Exception as e:
+            st.error(f"Ошибка: {e}")
