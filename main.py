@@ -1,5 +1,6 @@
 import os
 import re
+import zipfile
 import streamlit as st
 from dotenv import load_dotenv
 from gigachat import GigaChat
@@ -44,7 +45,7 @@ if not os.path.exists(DOCS_DIR):
     os.makedirs(DOCS_DIR)
 
 st.sidebar.markdown("---")
-st.sidebar.header(" Вход для администратора")
+st.sidebar.header("🔐 Вход для администратора")
 
 if "is_admin" not in st.session_state:
     st.session_state.is_admin = False
@@ -70,20 +71,35 @@ else:
     st.sidebar.header("📤 Загрузка файлов в архив")
 
     uploaded_files = st.sidebar.file_uploader(
-        "Выберите файлы",
+        "Выберите файлы или архивы (zip)",
         accept_multiple_files=True,
         type=["pdf", "txt", "doc", "docx", "xls", "xlsx", "jpg", "png", "zip", "rar", "pptx", "csv"]
     )
 
     if uploaded_files:
         for uploaded_file in uploaded_files:
-            filepath = os.path.join(DOCS_DIR, uploaded_file.name)
-            if not os.path.exists(filepath):
-                with open(filepath, "wb") as f:
-                    f.write(uploaded_file.getbuffer())
-                st.sidebar.success(f"✅ {uploaded_file.name}")
+            filename = uploaded_file.name
+
+            if filename.lower().endswith('.zip'):
+                try:
+                    temp_path = os.path.join(DOCS_DIR, filename)
+                    with open(temp_path, "wb") as f:
+                        f.write(uploaded_file.getbuffer())
+                    with zipfile.ZipFile(temp_path, 'r') as zip_ref:
+                        zip_ref.extractall(DOCS_DIR)
+                    os.remove(temp_path)
+                    extracted = zip_ref.namelist()
+                    st.sidebar.success(f"✅ Распакован {filename} ({len(extracted)} файлов)")
+                except Exception as e:
+                    st.sidebar.error(f"❌ Ошибка распаковки {filename}: {e}")
             else:
-                st.sidebar.info(f"⚠️ {uploaded_file.name} уже есть")
+                filepath = os.path.join(DOCS_DIR, filename)
+                if not os.path.exists(filepath):
+                    with open(filepath, "wb") as f:
+                        f.write(uploaded_file.getbuffer())
+                    st.sidebar.success(f"✅ {filename}")
+                else:
+                    st.sidebar.info(f"⚠️ {filename} уже есть")
 
     files_in_archive = [f for f in os.listdir(DOCS_DIR) if os.path.isfile(os.path.join(DOCS_DIR, f))]
     if files_in_archive:
@@ -95,7 +111,9 @@ else:
 
     if st.sidebar.button("🗑️ Очистить архив"):
         for f in os.listdir(DOCS_DIR):
-            os.remove(os.path.join(DOCS_DIR, f))
+            fp = os.path.join(DOCS_DIR, f)
+            if os.path.isfile(fp):
+                os.remove(fp)
         st.sidebar.success("Архив очищен!")
         st.rerun()
 
@@ -108,16 +126,16 @@ def get_archive_files_list():
     return [f for f in os.listdir(DOCS_DIR) if os.path.isfile(os.path.join(DOCS_DIR, f))]
 
 
-def search_file_by_name(query: str) -> list:
+def search_file_by_name(query: str):
     if not os.path.exists(DOCS_DIR):
         return []
-    
+
     matched = []
     for root, dirs, files in os.walk(DOCS_DIR):
         for f in files:
             if query.lower() in f.lower():
                 matched.append(os.path.relpath(os.path.join(root, f), DOCS_DIR))
-    
+
     return matched
 
 
@@ -133,57 +151,24 @@ def build_system_instruction():
     files_list = get_archive_files_list()
 
     if files_list:
-        files_str = "\n".join(f"- {f}" for f in files_list)
-        files_section = f"""
-ДОСТУПНЫЕ ФАЙЛЫ В АРХИВЕ:
-{files_str}
-"""
+        files_str = "\n".join(["- " + f for f in files_list])
+        files_section = "ДОСТУПНЫЕ ФАЙЛЫ В АРХИВЕ:\n" + files_str + "\n"
     else:
-        files_section = """
-ВНИМАНИЕ: АРХИВ ПУСТ. Файлов нет.
-"""
+        files_section = "ВНИМАНИЕ: АРХИВ ПУСТ. Файлов нет.\n"
 
-    return f"""Ты — ассистент файлового архива.
+    instruction = "Ты — ассистент файлового архива.\n\n"
+    instruction += files_section + "\n"
+    instruction += "ПРАВИЛА:\n"
+    instruction += "1. Отвечай кратко и по делу.\n"
+    instruction += "2. Если файлы найдены — просто подтверди это текстом.\n"
+    instruction += "3. Если файлов нет — скажи, что ничего не найдено.\n"
+    instruction += "4. НЕ используй маркеры [DOWNLOAD:...] — кнопки создаются автоматически.\n"
 
-{files_section}
-
-ПРАВИЛА:
-1. Отвечай кратко и по делу.
-2. Если файлы найдены — просто подтверди это текстом.
-3. Если файлов нет — скажи, что ничего не найдено.
-4. НЕ используй маркеры [DOWNLOAD:...] — кнопки создаются автоматически.
-
-Пример ответа при найденных файлах:
-"Нашёл для вас следующие файлы:"
-
-Пример ответа при отсутствии файлов:
-"По вашему запросу ничего не найдено в архиве.""""
+    return instruction
 
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
-
-
-def render_message(text: str, prefix: str = ""):
-    parts = re.split(r'\[DOWNLOAD:([^\]]+)\]', text)
-
-    for i, part in enumerate(parts):
-        if i % 2 == 0:
-            if part.strip():
-                st.markdown(part)
-        else:
-            filename = part.strip()
-            filepath = os.path.join(DOCS_DIR, filename)
-            key = f"{prefix}dl_{filename}_{i}"
-
-            if os.path.exists(filepath):
-                with open(filepath, "rb") as f:
-                    st.download_button(
-                        label=f"📥 Скачать: {filename}",
-                        data=f.read(),
-                        file_name=filename,
-                        key=key
-                    )
 
 
 def extract_text(response):
@@ -196,15 +181,15 @@ def extract_text(response):
     return str(response)
 
 
-def render_download_buttons(files: list, prefix: str = ""):
+def render_download_buttons(files, prefix=""):
     for idx, filename in enumerate(files):
         filepath = os.path.join(DOCS_DIR, filename)
-        key = f"{prefix}auto_dl_{filename}_{idx}"
-        
+        key = prefix + "auto_dl_" + filename + "_" + str(idx)
+
         if os.path.exists(filepath):
             with open(filepath, "rb") as f:
                 st.download_button(
-                    label=f"📥 Скачать: {filename}",
+                    label="📥 Скачать: " + filename,
                     data=f.read(),
                     file_name=filename,
                     key=key
@@ -213,10 +198,7 @@ def render_download_buttons(files: list, prefix: str = ""):
 
 for idx, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
-        if msg["role"] == "assistant" and "[DOWNLOAD:" in msg["content"]:
-            render_message(msg["content"], f"hist{idx}_")
-        else:
-            st.markdown(msg["content"])
+        st.markdown(msg["content"])
 
 
 if q := st.chat_input("Например: найди отчёт по продажам..."):
@@ -230,17 +212,15 @@ if q := st.chat_input("Например: найди отчёт по продаж
             system_prompt = build_system_instruction()
 
             if found_files:
-                files_str = "\n".join(f"- {f}" for f in found_files)
-                user_prompt = f"""Запрос пользователя: '{q}'
-Найдено файлов: {len(found_files)}
-{files_str}
-
-Подтверди находку текстом."""
+                files_str = "\n".join(["- " + f for f in found_files])
+                user_prompt = "Запрос пользователя: '" + q + "'\n"
+                user_prompt += "Найдено файлов: " + str(len(found_files)) + "\n"
+                user_prompt += files_str + "\n\n"
+                user_prompt += "Подтверди находку текстом."
             else:
-                user_prompt = f"""Запрос пользователя: '{q}'
-Файлы не найдены.
-
-Скажи, что ничего не найдено."""
+                user_prompt = "Запрос пользователя: '" + q + "'\n"
+                user_prompt += "Файлы не найдены.\n\n"
+                user_prompt += "Скажи, что ничего не найдено."
 
             msgs = [ChatMessage(role="system", content=system_prompt)]
             for m in st.session_state.messages:
@@ -257,13 +237,13 @@ if q := st.chat_input("Например: найди отчёт по продаж
             text = extract_text(response)
 
             st.markdown(text)
-            
+
             if found_files:
                 st.markdown("---")
-                st.markdown(f"**📎 Найдено файлов: {len(found_files)}**")
+                st.markdown("**📎 Найдено файлов: " + str(len(found_files)) + "**")
                 render_download_buttons(found_files, "new_")
-            
+
             st.session_state.messages.append({"role": "assistant", "content": text})
 
         except Exception as e:
-            st.error(f"Ошибка: {e}")
+            st.error("Ошибка: " + str(e))
