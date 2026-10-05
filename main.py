@@ -38,11 +38,12 @@ if not client_id or not client_secret:
 
 st.set_page_config(page_title="ИИ Файловый Менеджер", page_icon="🗂️", layout="wide")
 st.title("🗂️ ИИ-Агент для поиска файлов")
-st.write("Напишите название файла, и я найду его в архиве.")
+st.write("Напишите, что ищете — я пойму любую фразу.")
 
 DOCS_DIR = "my_documents"
 if not os.path.exists(DOCS_DIR):
     os.makedirs(DOCS_DIR)
+
 
 st.sidebar.markdown("---")
 st.sidebar.header("🔐 Вход для администратора")
@@ -59,7 +60,7 @@ if not st.session_state.is_admin:
             st.sidebar.success("✅ Вход выполнен!")
             st.rerun()
         else:
-            st.sidebar.error(" Неверный пароль")
+            st.sidebar.error("❌ Неверный пароль")
 else:
     st.sidebar.success("✅ Вы вошли как администратор")
 
@@ -89,23 +90,23 @@ else:
                         zip_ref.extractall(DOCS_DIR)
                     os.remove(temp_path)
                     extracted = zip_ref.namelist()
-                    st.sidebar.success(f"✅ Распакован {filename} ({len(extracted)} файлов)")
+                    st.sidebar.success("✅ Распакован " + filename + " (" + str(len(extracted)) + " файлов)")
                 except Exception as e:
-                    st.sidebar.error(f"❌ Ошибка распаковки {filename}: {e}")
+                    st.sidebar.error("❌ Ошибка распаковки " + filename + ": " + str(e))
             else:
                 filepath = os.path.join(DOCS_DIR, filename)
                 if not os.path.exists(filepath):
                     with open(filepath, "wb") as f:
                         f.write(uploaded_file.getbuffer())
-                    st.sidebar.success(f"✅ {filename}")
+                    st.sidebar.success("✅ " + filename)
                 else:
-                    st.sidebar.info(f"⚠️ {filename} уже есть")
+                    st.sidebar.info("️ " + filename + " уже есть")
 
     files_in_archive = [f for f in os.listdir(DOCS_DIR) if os.path.isfile(os.path.join(DOCS_DIR, f))]
     if files_in_archive:
-        st.sidebar.markdown(f"**📁 В архиве ({len(files_in_archive)}):**")
+        st.sidebar.markdown("**📁 В архиве (" + str(len(files_in_archive)) + "):**")
         for fname in files_in_archive:
-            st.sidebar.text(f"  • {fname}")
+            st.sidebar.text("  • " + fname)
     else:
         st.sidebar.warning("Архив пуст")
 
@@ -120,23 +121,88 @@ else:
 st.sidebar.markdown("---")
 
 
-def get_archive_files_list():
-    if not os.path.exists(DOCS_DIR):
-        return []
-    return [f for f in os.listdir(DOCS_DIR) if os.path.isfile(os.path.join(DOCS_DIR, f))]
+STOP_WORDS = {
+    "помоги", "помогите", "найди", "найти", "покажи", "покажите",
+    "открой", "открыть", "скачай", "скачать", "давай", "дайте",
+    "посмотри", "посмотрите", "подскажи", "подскажите", "достань",
+    "вытащи", "извлеки", "предоставь", "предоставьте", "выдай",
+    "выдайте", "поищи", "поискать", "ищи", "искать", "отыщи",
+    "я", "мы", "ты", "вы", "он", "она", "оно", "они",
+    "мне", "нам", "тебе", "вам", "ему", "ей", "им",
+    "меня", "нас", "тебя", "вас", "его", "её", "их",
+    "мой", "моя", "моё", "мои", "наш", "наша", "наше", "наши",
+    "твой", "твоя", "твоё", "твои", "ваш", "ваша", "ваше", "ваши",
+    "чтобы", "что", "и", "а", "но", "или", "же", "бы", "ли",
+    "в", "на", "по", "с", "из", "от", "до", "за", "к", "у",
+    "о", "об", "обо", "при", "через", "после", "перед", "между",
+    "для", "без", "кроме", "вместо", "около", "возле", "рядом",
+    "пожалуйста", "будь", "будьте", "добр", "хороший",
+    "хочу", "хотел", "хотела", "хотелось", "нужно", "надо",
+    "необходимо", "требуется", "желательно", "мечтаю",
+    "себя", "сам", "сама",
+    "только", "именно", "даже", "уже", "ещё", "еще",
+    "вот", "вон", "тут", "там", "здесь", "сейчас", "потом",
+    "быстро", "срочно", "ладно", "ок", "окей",
+    "где", "как", "когда", "почему", "зачем", "какой", "какая",
+    "какое", "какие", "кто", "сколько", "есть",
+    "файл", "файлы", "файлик", "документ", "документы", "документик",
+    "бумажка", "бумажки", "материал", "материалы", "вещь", "вещи",
+    "всё", "все", "любой", "любое", "любая", "любые", "что-нибудь",
+    "что-либо", "ничего", "нечто", "кое-что",
+    "просто", "нужен", "нужна", "нужно", "хотелось", "желательно"
+}
 
 
-def search_file_by_name(query: str):
+def extract_keywords(query):
+    query = query.lower()
+    query = re.sub(r'[^\w\s\-_а-яё]', ' ', query)
+    words = query.split()
+    keywords = []
+    for word in words:
+        word_clean = word.strip()
+        if len(word_clean) < 2:
+            continue
+        if word_clean in STOP_WORDS:
+            continue
+        if word_clean not in keywords:
+            keywords.append(word_clean)
+    return keywords
+
+
+def search_file_by_name(query):
     if not os.path.exists(DOCS_DIR):
         return []
+
+    keywords = extract_keywords(query)
+
+    if not keywords:
+        keywords = [query.lower().strip()]
 
     matched = []
     for root, dirs, files in os.walk(DOCS_DIR):
         for f in files:
-            if query.lower() in f.lower():
-                matched.append(os.path.relpath(os.path.join(root, f), DOCS_DIR))
+            filename_lower = f.lower()
+            if all(kw in filename_lower for kw in keywords):
+                rel_path = os.path.relpath(os.path.join(root, f), DOCS_DIR)
+                if rel_path not in matched:
+                    matched.append(rel_path)
+
+    if not matched and len(keywords) > 1:
+        for root, dirs, files in os.walk(DOCS_DIR):
+            for f in files:
+                filename_lower = f.lower()
+                if any(kw in filename_lower for kw in keywords):
+                    rel_path = os.path.relpath(os.path.join(root, f), DOCS_DIR)
+                    if rel_path not in matched:
+                        matched.append(rel_path)
 
     return matched
+
+
+def get_archive_files_list():
+    if not os.path.exists(DOCS_DIR):
+        return []
+    return [f for f in os.listdir(DOCS_DIR) if os.path.isfile(os.path.join(DOCS_DIR, f))]
 
 
 @st.cache_resource
@@ -156,13 +222,14 @@ def build_system_instruction():
     else:
         files_section = "ВНИМАНИЕ: АРХИВ ПУСТ. Файлов нет.\n"
 
-    instruction = "Ты — ассистент файлового архива.\n\n"
+    instruction = "Ты — дружелюбный ассистент файлового архива.\n\n"
     instruction += files_section + "\n"
     instruction += "ПРАВИЛА:\n"
-    instruction += "1. Отвечай кратко и по делу.\n"
-    instruction += "2. Если файлы найдены — просто подтверди это текстом.\n"
-    instruction += "3. Если файлов нет — скажи, что ничего не найдено.\n"
+    instruction += "1. Отвечай живо и по-человечески, как хороший помощник.\n"
+    instruction += "2. Если файлы найдены — кратко опиши, что нашёл.\n"
+    instruction += "3. Если файлов нет — скажи об этом вежливо и предложи уточнить запрос.\n"
     instruction += "4. НЕ используй маркеры [DOWNLOAD:...] — кнопки создаются автоматически.\n"
+    instruction += "5. Можешь использовать эмодзи для живости.\n"
 
     return instruction
 
@@ -189,7 +256,7 @@ def render_download_buttons(files, prefix=""):
         if os.path.exists(filepath):
             with open(filepath, "rb") as f:
                 st.download_button(
-                    label="📥 Скачать: " + filename,
+                    label=" Скачать: " + filename,
                     data=f.read(),
                     file_name=filename,
                     key=key
@@ -201,7 +268,7 @@ for idx, msg in enumerate(st.session_state.messages):
         st.markdown(msg["content"])
 
 
-if q := st.chat_input("Например: найди отчёт по продажам..."):
+if q := st.chat_input("Например: помоги найти отчёт по продажам..."):
     st.session_state.messages.append({"role": "user", "content": q})
     with st.chat_message("user"):
         st.markdown(q)
@@ -209,18 +276,21 @@ if q := st.chat_input("Например: найди отчёт по продаж
     with st.chat_message("assistant"):
         try:
             found_files = search_file_by_name(q)
+            keywords = extract_keywords(q)
             system_prompt = build_system_instruction()
 
             if found_files:
                 files_str = "\n".join(["- " + f for f in found_files])
                 user_prompt = "Запрос пользователя: '" + q + "'\n"
+                user_prompt += "Ключевые слова для поиска: " + ", ".join(keywords) + "\n"
                 user_prompt += "Найдено файлов: " + str(len(found_files)) + "\n"
                 user_prompt += files_str + "\n\n"
-                user_prompt += "Подтверди находку текстом."
+                user_prompt += "Кратко и дружелюбно подтверди, что нашёл эти файлы."
             else:
                 user_prompt = "Запрос пользователя: '" + q + "'\n"
+                user_prompt += "Ключевые слова: " + ", ".join(keywords) + "\n"
                 user_prompt += "Файлы не найдены.\n\n"
-                user_prompt += "Скажи, что ничего не найдено."
+                user_prompt += "Вежливо скажи, что ничего не нашёл, и предложи уточнить запрос."
 
             msgs = [ChatMessage(role="system", content=system_prompt)]
             for m in st.session_state.messages:
@@ -230,7 +300,7 @@ if q := st.chat_input("Например: найди отчёт по продаж
             payload = ChatCompletionRequest(
                 model="GigaChat-3-Ultra",
                 messages=msgs,
-                temperature=0.3
+                temperature=0.5
             )
 
             response = client.chat.create(payload)
