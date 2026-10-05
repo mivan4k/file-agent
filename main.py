@@ -81,11 +81,6 @@ else:
         for uploaded_file in uploaded_files:
             filename = uploaded_file.name
             file_bytes = uploaded_file.getvalue()
-            
-            # Проверка, что файл не пустой
-            if len(file_bytes) == 0:
-                st.sidebar.warning("⚠️ " + filename + " пустой, пропускаем")
-                continue
 
             if filename.lower().endswith('.zip'):
                 try:
@@ -98,19 +93,21 @@ else:
                     extracted = zip_ref.namelist()
                     st.sidebar.success("✅ Распакован " + filename + " (" + str(len(extracted)) + " файлов)")
                 except Exception as e:
-                    st.sidebar.error("❌ Ошибка распаковки " + filename + ": " + str(e))
+                    st.sidebar.error(" Ошибка распаковки " + filename + ": " + str(e))
             else:
                 filepath = os.path.join(DOCS_DIR, filename)
                 with open(filepath, "wb") as f:
                     f.write(file_bytes)
-                st.sidebar.success("✅ " + filename + " (" + str(len(file_bytes)) + " байт)")
+                size_str = str(len(file_bytes)) + " байт" if len(file_bytes) > 0 else "пустой"
+                st.sidebar.success("✅ " + filename + " (" + size_str + ")")
 
     files_in_archive = [f for f in os.listdir(DOCS_DIR) if os.path.isfile(os.path.join(DOCS_DIR, f))]
     if files_in_archive:
         st.sidebar.markdown("**📁 В архиве (" + str(len(files_in_archive)) + "):**")
         for fname in files_in_archive:
             fsize = os.path.getsize(os.path.join(DOCS_DIR, fname))
-            st.sidebar.text("  • " + fname + " (" + str(fsize) + " байт)")
+            size_str = str(fsize) + " байт" if fsize > 0 else "пустой"
+            st.sidebar.text("  • " + fname + " (" + size_str + ")")
     else:
         st.sidebar.warning("Архив пуст")
 
@@ -125,7 +122,6 @@ else:
 st.sidebar.markdown("---")
 
 
-# СТОП-СЛОВА — только служебные, БЕЗ слов "файл", "документ" и т.д.
 STOP_WORDS = {
     "помоги", "помогите", "найди", "найти", "покажи", "покажите",
     "открой", "открыть", "скачай", "скачать", "давай", "дайте",
@@ -182,12 +178,10 @@ def search_file_by_name(query):
 
     keywords = extract_keywords(query)
 
-    # Если после фильтрации не осталось слов — ищем по всей фразе
     if not keywords:
         clean_query = re.sub(r'[^\w\s\-_а-яё]', ' ', query.lower())
         keywords = [w for w in clean_query.split() if len(w) >= 2 and w not in STOP_WORDS]
     
-    # Если всё ещё пусто — берём последнее слово из запроса
     if not keywords:
         words = query.lower().split()
         for w in reversed(words):
@@ -199,7 +193,6 @@ def search_file_by_name(query):
     if not keywords:
         return []
 
-    # Первый проход: ищем файлы, содержащие ВСЕ ключевые слова
     matched = []
     for root, dirs, files in os.walk(DOCS_DIR):
         for f in files:
@@ -209,7 +202,6 @@ def search_file_by_name(query):
                 if rel_path not in matched:
                     matched.append(rel_path)
 
-    # Второй проход: если ничего не нашли, ищем по ЛЮБОМУ ключевому слову
     if not matched and len(keywords) > 1:
         for root, dirs, files in os.walk(DOCS_DIR):
             for f in files:
