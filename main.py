@@ -69,7 +69,7 @@ if not st.session_state.is_admin:
 else:
     st.sidebar.success("✅ Вы вошли как администратор")
 
-    if st.sidebar.button("🚪 Выйти"):
+    if st.sidebar.button(" Выйти"):
         st.session_state.is_admin = False
         st.rerun()
 
@@ -124,6 +124,7 @@ else:
                     st.sidebar.warning("⚠️ Для 7Z нужна библиотека py7zr")
                     return 0
             
+            # Рекурсивная распаковка вложенных архивов
             if extracted_count > 0:
                 for item in os.listdir(extract_dir):
                     item_path = os.path.join(extract_dir, item)
@@ -158,26 +159,35 @@ else:
                 if extracted > 0:
                     st.sidebar.success("✅ Распакован " + filename + " (" + str(extracted) + " файлов)")
                 else:
-                    st.sidebar.warning("⚠️ " + filename + " не удалось распаковать")
+                    st.sidebar.warning("️ " + filename + " не удалось распаковать")
             else:
                 size_str = str(len(file_bytes)) + " байт" if len(file_bytes) > 0 else "пустой"
                 st.sidebar.success("✅ " + filename + " (" + size_str + ")")
 
-    files_in_archive = [f for f in os.listdir(DOCS_DIR) if os.path.isfile(os.path.join(DOCS_DIR, f))]
-    if files_in_archive:
-        st.sidebar.markdown("**📁 В архиве (" + str(len(files_in_archive)) + "):**")
-        for fname in files_in_archive:
-            fsize = os.path.getsize(os.path.join(DOCS_DIR, fname))
+    # ✅ ИСПРАВЛЕНИЕ: Рекурсивный сбор всех файлов из ВСЕХ подпапок
+    all_files_recursive = []
+    for root, dirs, files in os.walk(DOCS_DIR):
+        for f in files:
+            rel_path = os.path.relpath(os.path.join(root, f), DOCS_DIR)
+            all_files_recursive.append(rel_path)
+    
+    if all_files_recursive:
+        st.sidebar.markdown("**📁 В архиве (" + str(len(all_files_recursive)) + " файлов):**")
+        for fname in all_files_recursive:
+            full_path = os.path.join(DOCS_DIR, fname)
+            fsize = os.path.getsize(full_path)
             size_str = str(fsize) + " байт" if fsize > 0 else "пустой"
+            # Показываем путь относительно DOCS_DIR
             st.sidebar.text("  • " + fname + " (" + size_str + ")")
     else:
         st.sidebar.warning("Архив пуст")
 
     if st.sidebar.button("🗑️ Очистить архив"):
-        for f in os.listdir(DOCS_DIR):
-            fp = os.path.join(DOCS_DIR, f)
-            if os.path.isfile(fp):
-                os.remove(fp)
+        for root, dirs, files in os.walk(DOCS_DIR, topdown=False):
+            for f in files:
+                os.remove(os.path.join(root, f))
+            for d in dirs:
+                os.rmdir(os.path.join(root, d))
         st.sidebar.success("Архив очищен!")
         st.rerun()
 
@@ -188,17 +198,13 @@ st.sidebar.markdown("---")
 # НОРМАЛИЗАЦИЯ: генерация вариантов слова
 # ============================================================
 def get_word_variants(word):
-    """
-    Возвращает список вариантов слова для поиска.
-    Пример: "презентации" → ["презентации", "презентаци", "презентац", "презента"]
-    """
     word = word.lower().strip()
     if len(word) < 2:
         return []
     
     variants = [word]
     
-    # Отсекаем по 1, 2, 3, 4 последних символа (если слово достаточно длинное)
+    # Отсекаем по 1, 2, 3, 4 последних символа
     for i in range(1, 5):
         if len(word) - i >= 4:
             stripped = word[:-i]
@@ -209,10 +215,10 @@ def get_word_variants(word):
 
 
 # ============================================================
-# ПОИСК С НОРМАЛИЗАЦИЕЙ
+# РЕКУРСИВНЫЙ ПОИСК ПО ВСЕМ ПОДПАПКАМ
 # ============================================================
 def search_by_keyword(keyword):
-    """Ищет файлы по ключевому слову с нормализацией."""
+    """Рекурсивно ищет файлы по ключевому слову во ВСЕХ подпапках."""
     if not os.path.exists(DOCS_DIR):
         return []
     
@@ -223,10 +229,10 @@ def search_by_keyword(keyword):
     variants = get_word_variants(keyword)
     
     matched = []
+    # os.walk рекурсивно обходит ВСЕ подпапки
     for root, dirs, files in os.walk(DOCS_DIR):
         for f in files:
             filename_lower = f.lower()
-            # Проверяем: содержит ли имя файла ЛЮБОЙ из вариантов
             for variant in variants:
                 if variant in filename_lower:
                     rel_path = os.path.relpath(os.path.join(root, f), DOCS_DIR)
@@ -236,10 +242,16 @@ def search_by_keyword(keyword):
     return matched
 
 
-def get_archive_files_list():
+def get_all_files_recursive():
+    """Возвращает ВСЕ файлы рекурсивно из всех подпапок."""
     if not os.path.exists(DOCS_DIR):
         return []
-    return [f for f in os.listdir(DOCS_DIR) if os.path.isfile(os.path.join(DOCS_DIR, f))]
+    result = []
+    for root, dirs, files in os.walk(DOCS_DIR):
+        for f in files:
+            rel_path = os.path.relpath(os.path.join(root, f), DOCS_DIR)
+            result.append(rel_path)
+    return result
 
 
 # ============================================================
@@ -312,7 +324,6 @@ def analyze_query_with_ai(query, files_list):
     except Exception as e:
         print("⚠️ Ошибка парсинга JSON: " + str(e))
     
-    # Fallback
     stop_words = {"привет", "помоги", "найди", "найти", "покажи", "мне", "я", "хочу", "чтобы", "ты", "есть", "какие", "и", "а", "но", "в", "на", "по"}
     query_clean = re.sub(r'[^\w\s\-_а-яё]', ' ', query.lower())
     words = [w for w in query_clean.split() if len(w) >= 2 and w not in stop_words]
@@ -323,18 +334,17 @@ def analyze_query_with_ai(query, files_list):
 # УМНЫЙ ПОИСК С ОТЛАДКОЙ
 # ============================================================
 def smart_search(query):
-    files_list = get_archive_files_list()
+    files_list = get_all_files_recursive()
     
     if not files_list:
         return [], [], "Архив пуст"
     
     debug_info = []
+    debug_info.append("📁 Всего файлов в архиве: " + str(len(files_list)))
     
-    # Шаг 1: ИИ генерирует фразы
     search_phrases = analyze_query_with_ai(query, files_list)
     debug_info.append(" ИИ предложил фразы: " + ", ".join(search_phrases))
     
-    # Шаг 2: Ищем по каждой фразе
     all_found = []
     for phrase in search_phrases:
         variants = get_word_variants(phrase)
@@ -350,16 +360,15 @@ def smart_search(query):
             if f not in all_found:
                 all_found.append(f)
     
-    # Шаг 3: Fallback — прямой поиск по словам запроса
     if not all_found:
-        debug_info.append("️ Ничего не нашли, делаем fallback-поиск...")
+        debug_info.append("⚠️ Ничего не нашли, делаем fallback-поиск...")
         stop_words = {"привет", "помоги", "найди", "найти", "покажи", "мне", "я", "хочу", "чтобы", "ты", "есть", "какие", "и", "а", "но", "в", "на", "по", "с", "из", "от", "до", "за", "к", "у"}
         query_clean = re.sub(r'[^\w\s\-_а-яё]', ' ', query.lower())
         fallback_words = [w for w in query_clean.split() if len(w) >= 2 and w not in stop_words]
         
         for word in fallback_words:
             variants = get_word_variants(word)
-            debug_info.append(" Fallback: ищем '" + word + "' → варианты: " + ", ".join(variants))
+            debug_info.append("  Fallback: ищем '" + word + "' → варианты: " + ", ".join(variants))
             
             found = search_by_keyword(word)
             if found:
@@ -380,7 +389,6 @@ def smart_search(query):
 def generate_final_answer(query, search_phrases, found_files):
     if found_files:
         files_str = "\n".join(["- " + f for f in found_files])
-        phrases_str = ", ".join(search_phrases)
         
         system_prompt = """Ты — дружелюбный ассистент файлового архива.
 Отвечай живо, по-человечески, можешь использовать эмодзи.
@@ -401,19 +409,19 @@ def generate_final_answer(query, search_phrases, found_files):
 
 
 # ============================================================
-# РЕНДЕРИНГ КНОПОК
+# РЕНДЕРИНГ КНОПОК СКАЧИВАНИЯ
 # ============================================================
 def render_download_buttons(files, prefix=""):
     for idx, filename in enumerate(files):
         filepath = os.path.join(DOCS_DIR, filename)
-        key = prefix + "auto_dl_" + filename + "_" + str(idx)
+        key = prefix + "auto_dl_" + filename.replace("/", "_").replace("\\", "_") + "_" + str(idx)
 
         if os.path.exists(filepath):
             with open(filepath, "rb") as f:
                 st.download_button(
                     label="📥 Скачать: " + filename,
                     data=f.read(),
-                    file_name=filename,
+                    file_name=os.path.basename(filename),
                     key=key
                 )
 
@@ -445,11 +453,10 @@ if q := st.chat_input("Например: помоги найти отчёт по
             
             st.markdown(answer_text)
 
-            # Показываем отладочную информацию
             with st.expander("🔧 Отладка (как работал поиск)"):
                 st.code(debug_text, language="text")
                 st.markdown("**Все файлы в архиве:**")
-                st.markdown("\n".join(["- " + f for f in get_archive_files_list()]))
+                st.markdown("\n".join(["- " + f for f in get_all_files_recursive()]))
 
             if found_files:
                 st.markdown("---")
