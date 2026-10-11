@@ -51,7 +51,7 @@ if not os.path.exists(DOCS_DIR):
 # АДМИН-ПАНЕЛЬ
 # ============================================================
 st.sidebar.markdown("---")
-st.sidebar.header("🔐 Вход для администратора")
+st.sidebar.header(" Вход для администратора")
 
 if "is_admin" not in st.session_state:
     st.session_state.is_admin = False
@@ -65,7 +65,7 @@ if not st.session_state.is_admin:
             st.sidebar.success("✅ Вход выполнен!")
             st.rerun()
         else:
-            st.sidebar.error("❌ Неверный пароль")
+            st.sidebar.error(" Неверный пароль")
 else:
     st.sidebar.success("✅ Вы вошли как администратор")
 
@@ -83,29 +83,25 @@ else:
     )
 
     def extract_archive(filepath, extract_dir, depth=0):
-        """Рекурсивная распаковка архивов."""
-        if depth > 3:  # Максимальная глубина вложенности
+        if depth > 3:
             return 0
         
         extracted_count = 0
         filename = os.path.basename(filepath).lower()
         
         try:
-            # ZIP
             if filename.endswith('.zip'):
                 with zipfile.ZipFile(filepath, 'r') as zip_ref:
                     zip_ref.extractall(extract_dir)
                     extracted_count = len(zip_ref.namelist())
                 os.remove(filepath)
             
-            # TAR, TAR.GZ, TGZ
             elif filename.endswith(('.tar', '.tar.gz', '.tgz')):
                 with tarfile.open(filepath, 'r:*') as tar_ref:
                     tar_ref.extractall(extract_dir)
                     extracted_count = len(tar_ref.getnames())
                 os.remove(filepath)
             
-            # RAR
             elif filename.endswith('.rar'):
                 try:
                     import rarfile
@@ -114,10 +110,9 @@ else:
                         extracted_count = len(rar_ref.namelist())
                     os.remove(filepath)
                 except ImportError:
-                    st.sidebar.warning("⚠️ Для RAR нужна библиотека rarfile")
+                    st.sidebar.warning("️ Для RAR нужна библиотека rarfile")
                     return 0
             
-            # 7Z
             elif filename.endswith('.7z'):
                 try:
                     import py7zr
@@ -126,10 +121,9 @@ else:
                         extracted_count = len(sz_ref.getnames())
                     os.remove(filepath)
                 except ImportError:
-                    st.sidebar.warning("⚠️ Для 7Z нужна библиотека py7zr")
+                    st.sidebar.warning("️ Для 7Z нужна библиотека py7zr")
                     return 0
             
-            # Рекурсивная распаковка вложенных архивов
             if extracted_count > 0:
                 for item in os.listdir(extract_dir):
                     item_path = os.path.join(extract_dir, item)
@@ -148,11 +142,9 @@ else:
             file_bytes = uploaded_file.getvalue()
             temp_path = os.path.join(DOCS_DIR, filename)
             
-            # Сохраняем файл временно
             with open(temp_path, "wb") as f:
                 f.write(file_bytes)
             
-            # Проверяем, архив ли это
             is_archive = False
             archive_extensions = ['.zip', '.tar', '.tar.gz', '.tgz', '.rar', '.7z']
             
@@ -168,13 +160,12 @@ else:
                 else:
                     st.sidebar.warning("⚠️ " + filename + " не удалось распаковать")
             else:
-                # Обычный файл — оставляем как есть
                 size_str = str(len(file_bytes)) + " байт" if len(file_bytes) > 0 else "пустой"
                 st.sidebar.success("✅ " + filename + " (" + size_str + ")")
 
     files_in_archive = [f for f in os.listdir(DOCS_DIR) if os.path.isfile(os.path.join(DOCS_DIR, f))]
     if files_in_archive:
-        st.sidebar.markdown("** В архиве (" + str(len(files_in_archive)) + "):**")
+        st.sidebar.markdown("**📁 В архиве (" + str(len(files_in_archive)) + "):**")
         for fname in files_in_archive:
             fsize = os.path.getsize(os.path.join(DOCS_DIR, fname))
             size_str = str(fsize) + " байт" if fsize > 0 else "пустой"
@@ -194,10 +185,49 @@ st.sidebar.markdown("---")
 
 
 # ============================================================
-# ПОИСК ПО ИМЕНИ ФАЙЛА
+# НОРМАЛИЗАЦИЯ СЛОВ (отсечение окончаний)
+# ============================================================
+def get_word_variants(word):
+    """
+    Возвращает список вариантов слова для поиска:
+    само слово + слово без типичных русских окончаний.
+    
+    Пример: "презентации" → ["презентации", "презентаци", "презентац", "презента"]
+    """
+    word = word.lower().strip()
+    variants = [word]
+    
+    # Типичные русские окончания для отсечения
+    endings_to_strip = [
+        "ия", "ии", "ие", "ию", "ей", "ям", "ях", "ами", "ями",
+        "ы", "и", "а", "я", "у", "ю", "ом", "ем", "ах", "ях", 
+        "ам", "ям", "ов", "ев", "ий", "ые", "ых", "ым",
+        "ого", "его", "ому", "ему", "ой", "ей", "ая", "яя",
+        "ость", "ство", "ние", "тие", "ция", "сия",
+        " presentations", "s"  # английские окончания
+    ]
+    
+    for ending in endings_to_strip:
+        if word.endswith(ending) and len(word) - len(ending) >= 4:
+            stripped = word[:-len(ending)]
+            if stripped not in variants:
+                variants.append(stripped)
+    
+    # Также добавляем варианты с отсечением 1-2 последних символов (для надёжности)
+    for i in range(1, 3):
+        if len(word) - i >= 4:
+            short = word[:-i]
+            if short not in variants:
+                variants.append(short)
+    
+    return variants
+
+
+# ============================================================
+# ПОИСК ПО КЛЮЧЕВОМУ СЛОВУ С НОРМАЛИЗАЦИЕЙ
 # ============================================================
 def search_by_keyword(keyword):
-    """Ищет файлы, содержащие ключевое слово в названии."""
+    """Ищет файлы по ключевому слову с учётом нормализации (окончаний)."""
     if not os.path.exists(DOCS_DIR):
         return []
     
@@ -205,10 +235,15 @@ def search_by_keyword(keyword):
     if len(keyword) < 2:
         return []
     
+    # Генерируем варианты слова (с отсечёнными окончаниями)
+    variants = get_word_variants(keyword)
+    
     matched = []
     for root, dirs, files in os.walk(DOCS_DIR):
         for f in files:
-            if keyword in f.lower():
+            filename_lower = f.lower()
+            # Проверяем: содержит ли имя файла любой из вариантов ключевого слова
+            if any(variant in filename_lower for variant in variants):
                 rel_path = os.path.relpath(os.path.join(root, f), DOCS_DIR)
                 if rel_path not in matched:
                     matched.append(rel_path)
@@ -216,7 +251,6 @@ def search_by_keyword(keyword):
 
 
 def search_all_files():
-    """Возвращает все файлы в архиве."""
     if not os.path.exists(DOCS_DIR):
         return []
     return [f for f in os.listdir(DOCS_DIR) if os.path.isfile(os.path.join(DOCS_DIR, f))]
@@ -248,7 +282,6 @@ def extract_text(response):
 
 
 def call_gigachat(system_prompt, user_prompt, temperature=0.3):
-    """Универсальная функция вызова GigaChat."""
     msgs = [
         ChatMessage(role="system", content=system_prompt),
         ChatMessage(role="user", content=user_prompt)
@@ -277,21 +310,22 @@ def analyze_query_with_ai(query, files_list):
 
 ПРАВИЛА:
 1. Верни ТОЛЬКО JSON-массив строк. Никакого другого текста.
-2. Предложи от 2 до 5 поисковых фраз.
-3. Включи:
-   - Прямые слова из запроса
-   - Синонимы и похожие слова
-   - Возможные опечатки или варианты написания
-   - Типы файлов (расширения), если уместно
-4. Все фразы — в нижнем регистре.
-5. Каждая фраза — короткая (1-2 слова).
+2. Предложи от 3 до 6 поисковых фраз.
+3. ОБЯЗАТЕЛЬНО включи прямые слова из запроса пользователя (в единственном числе, без окончаний).
+4. Добавь синонимы и похожие слова.
+5. Добавь типы файлов (расширения), если уместно.
+6. Все фразы — в нижнем регистре, в единственном числе.
+7. Каждая фраза — короткая (1-2 слова).
 
 ПРИМЕРЫ:
 Запрос: "Какие есть презентации?"
-Ответ: ["презентация", "презентации", "pptx", "слайды", "доклад"]
+Ответ: ["презентация", "pptx", "слайды", "доклад", "powerpoint"]
+
+Запрос: "привет найди мне презентации"
+Ответ: ["презентация", "pptx", "слайды", "доклад"]
 
 Запрос: "найди отчет по продажам за 2024"
-Ответ: ["отчет", "отчёт", "продажи", "2024", "xlsx", "csv"]
+Ответ: ["отчет", "отчёт", "продажа", "2024", "xlsx", "csv"]
 
 Запрос: "документ про закон Ньютона"
 Ответ: ["закон", "ньютон", "физика", "документ", "docx", "pdf"]"""
@@ -310,13 +344,15 @@ def analyze_query_with_ai(query, files_list):
     except Exception as e:
         print("⚠️ Ошибка парсинга JSON от ИИ: " + str(e))
     
+    # Fallback: простой парсинг
+    stop_words = {"привет", "помоги", "найди", "найти", "покажи", "мне", "я", "хочу", "чтобы", "ты", "есть", "какие"}
     query_clean = re.sub(r'[^\w\s\-_а-яё]', ' ', query.lower())
-    words = [w for w in query_clean.split() if len(w) >= 2]
+    words = [w for w in query_clean.split() if len(w) >= 2 and w not in stop_words]
     return words[:5] if words else [query.lower().strip()]
 
 
 # ============================================================
-# ШАГ 2: УМНЫЙ ПОИСК
+# ШАГ 2: УМНЫЙ ПОИСК С НОРМАЛИЗАЦИЕЙ
 # ============================================================
 def smart_search(query):
     files_list = get_archive_files_list()
@@ -324,14 +360,28 @@ def smart_search(query):
     if not files_list:
         return [], []
     
+    # Шаг 1: ИИ генерирует поисковые фразы
     search_phrases = analyze_query_with_ai(query, files_list)
     
+    # Шаг 2: Ищем по каждой фразе (с нормализацией окончаний)
     all_found = []
     for phrase in search_phrases:
         found = search_by_keyword(phrase)
         for f in found:
             if f not in all_found:
                 all_found.append(f)
+    
+    # Шаг 3: Fallback — если ничего не нашли, ищем по всем словам запроса
+    if not all_found:
+        stop_words = {"привет", "помоги", "найди", "найти", "покажи", "мне", "я", "хочу", "чтобы", "ты", "есть", "какие", "и", "а", "но", "в", "на", "по", "с", "из", "от", "до", "за", "к", "у"}
+        query_clean = re.sub(r'[^\w\s\-_а-яё]', ' ', query.lower())
+        fallback_words = [w for w in query_clean.split() if len(w) >= 2 and w not in stop_words]
+        
+        for word in fallback_words:
+            found = search_by_keyword(word)
+            for f in found:
+                if f not in all_found:
+                    all_found.append(f)
     
     return search_phrases, all_found
 
