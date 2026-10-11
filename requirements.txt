@@ -1,3 +1,5 @@
 streamlit
 gigachat
 python-dotenv
+rarfile
+py7zr
