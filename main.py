@@ -1,6 +1,8 @@
 import os
 import re
+import json
 import zipfile
+import tarfile
 import streamlit as st
 from dotenv import load_dotenv
 from gigachat import GigaChat
@@ -38,13 +40,16 @@ if not client_id or not client_secret:
 
 st.set_page_config(page_title="ИИ Файловый Менеджер", page_icon="🗂️", layout="wide")
 st.title("🗂️ ИИ-Агент для поиска файлов")
-st.write("Напишите, что ищете — я пойму любую фразу.")
+st.write("Загрузите архив или файлы — я всё найду!")
 
 DOCS_DIR = "my_documents"
 if not os.path.exists(DOCS_DIR):
     os.makedirs(DOCS_DIR)
 
 
+# ============================================================
+# АДМИН-ПАНЕЛЬ
+# ============================================================
 st.sidebar.markdown("---")
 st.sidebar.header("🔐 Вход для администратора")
 
@@ -64,46 +69,112 @@ if not st.session_state.is_admin:
 else:
     st.sidebar.success("✅ Вы вошли как администратор")
 
-    if st.sidebar.button(" Выйти"):
+    if st.sidebar.button("🚪 Выйти"):
         st.session_state.is_admin = False
         st.rerun()
 
     st.sidebar.markdown("---")
-    st.sidebar.header(" Загрузка файлов в архив")
+    st.sidebar.header("📤 Загрузка файлов и архивов")
+    st.sidebar.info("Поддерживаются: ZIP, TAR, TAR.GZ, RAR, 7Z, а также обычные файлы")
 
     uploaded_files = st.sidebar.file_uploader(
-        "Выберите файлы или архивы (zip)",
-        accept_multiple_files=True,
-        type=["pdf", "txt", "doc", "docx", "xls", "xlsx", "jpg", "png", "zip", "rar", "pptx", "csv"]
+        "Выберите файлы или архивы",
+        accept_multiple_files=True
     )
+
+    def extract_archive(filepath, extract_dir, depth=0):
+        """Рекурсивная распаковка архивов."""
+        if depth > 3:  # Максимальная глубина вложенности
+            return 0
+        
+        extracted_count = 0
+        filename = os.path.basename(filepath).lower()
+        
+        try:
+            # ZIP
+            if filename.endswith('.zip'):
+                with zipfile.ZipFile(filepath, 'r') as zip_ref:
+                    zip_ref.extractall(extract_dir)
+                    extracted_count = len(zip_ref.namelist())
+                os.remove(filepath)
+            
+            # TAR, TAR.GZ, TGZ
+            elif filename.endswith(('.tar', '.tar.gz', '.tgz')):
+                with tarfile.open(filepath, 'r:*') as tar_ref:
+                    tar_ref.extractall(extract_dir)
+                    extracted_count = len(tar_ref.getnames())
+                os.remove(filepath)
+            
+            # RAR
+            elif filename.endswith('.rar'):
+                try:
+                    import rarfile
+                    with rarfile.RarFile(filepath, 'r') as rar_ref:
+                        rar_ref.extractall(extract_dir)
+                        extracted_count = len(rar_ref.namelist())
+                    os.remove(filepath)
+                except ImportError:
+                    st.sidebar.warning("⚠️ Для RAR нужна библиотека rarfile")
+                    return 0
+            
+            # 7Z
+            elif filename.endswith('.7z'):
+                try:
+                    import py7zr
+                    with py7zr.SevenZipFile(filepath, 'r') as sz_ref:
+                        sz_ref.extractall(extract_dir)
+                        extracted_count = len(sz_ref.getnames())
+                    os.remove(filepath)
+                except ImportError:
+                    st.sidebar.warning("⚠️ Для 7Z нужна библиотека py7zr")
+                    return 0
+            
+            # Рекурсивная распаковка вложенных архивов
+            if extracted_count > 0:
+                for item in os.listdir(extract_dir):
+                    item_path = os.path.join(extract_dir, item)
+                    if os.path.isfile(item_path):
+                        sub_count = extract_archive(item_path, extract_dir, depth + 1)
+                        extracted_count += sub_count
+        
+        except Exception as e:
+            st.sidebar.error("❌ Ошибка распаковки " + os.path.basename(filepath) + ": " + str(e))
+        
+        return extracted_count
 
     if uploaded_files:
         for uploaded_file in uploaded_files:
             filename = uploaded_file.name
             file_bytes = uploaded_file.getvalue()
-
-            if filename.lower().endswith('.zip'):
-                try:
-                    temp_path = os.path.join(DOCS_DIR, filename)
-                    with open(temp_path, "wb") as f:
-                        f.write(file_bytes)
-                    with zipfile.ZipFile(temp_path, 'r') as zip_ref:
-                        zip_ref.extractall(DOCS_DIR)
-                    os.remove(temp_path)
-                    extracted = zip_ref.namelist()
-                    st.sidebar.success("✅ Распакован " + filename + " (" + str(len(extracted)) + " файлов)")
-                except Exception as e:
-                    st.sidebar.error(" Ошибка распаковки " + filename + ": " + str(e))
+            temp_path = os.path.join(DOCS_DIR, filename)
+            
+            # Сохраняем файл временно
+            with open(temp_path, "wb") as f:
+                f.write(file_bytes)
+            
+            # Проверяем, архив ли это
+            is_archive = False
+            archive_extensions = ['.zip', '.tar', '.tar.gz', '.tgz', '.rar', '.7z']
+            
+            for ext in archive_extensions:
+                if filename.lower().endswith(ext):
+                    is_archive = True
+                    break
+            
+            if is_archive:
+                extracted = extract_archive(temp_path, DOCS_DIR)
+                if extracted > 0:
+                    st.sidebar.success("✅ Распакован " + filename + " (" + str(extracted) + " файлов)")
+                else:
+                    st.sidebar.warning("⚠️ " + filename + " не удалось распаковать")
             else:
-                filepath = os.path.join(DOCS_DIR, filename)
-                with open(filepath, "wb") as f:
-                    f.write(file_bytes)
+                # Обычный файл — оставляем как есть
                 size_str = str(len(file_bytes)) + " байт" if len(file_bytes) > 0 else "пустой"
                 st.sidebar.success("✅ " + filename + " (" + size_str + ")")
 
     files_in_archive = [f for f in os.listdir(DOCS_DIR) if os.path.isfile(os.path.join(DOCS_DIR, f))]
     if files_in_archive:
-        st.sidebar.markdown("**📁 В архиве (" + str(len(files_in_archive)) + "):**")
+        st.sidebar.markdown("** В архиве (" + str(len(files_in_archive)) + "):**")
         for fname in files_in_archive:
             fsize = os.path.getsize(os.path.join(DOCS_DIR, fname))
             size_str = str(fsize) + " байт" if fsize > 0 else "пустой"
@@ -122,135 +193,48 @@ else:
 st.sidebar.markdown("---")
 
 
-STOP_WORDS = {
-    "помоги", "помогите", "найди", "найти", "покажи", "покажите",
-    "открой", "открыть", "скачай", "скачать", "давай", "дайте",
-    "посмотри", "посмотрите", "подскажи", "подскажите", "достань",
-    "вытащи", "извлеки", "предоставь", "предоставьте", "выдай",
-    "выдайте", "поищи", "поискать", "ищи", "искать", "отыщи",
-    "я", "мы", "ты", "вы", "он", "она", "оно", "они",
-    "мне", "нам", "тебе", "вам", "ему", "ей", "им",
-    "меня", "нас", "тебя", "вас", "его", "её", "их",
-    "мой", "моя", "моё", "мои", "наш", "наша", "наше", "наши",
-    "твой", "твоя", "твоё", "твои", "ваш", "ваша", "ваше", "ваши",
-    "чтобы", "что", "и", "а", "но", "или", "же", "бы", "ли",
-    "в", "на", "по", "с", "из", "от", "до", "за", "к", "у",
-    "о", "об", "обо", "при", "через", "после", "перед", "между",
-    "для", "без", "кроме", "вместо", "около", "возле", "рядом",
-    "пожалуйста", "будь", "будьте", "добр", "хороший",
-    "хочу", "хотел", "хотела", "хотелось", "нужно", "надо",
-    "необходимо", "требуется", "желательно", "мечтаю",
-    "себя", "сам", "сама",
-    "только", "именно", "даже", "уже", "ещё", "еще",
-    "вот", "вон", "тут", "там", "здесь", "сейчас", "потом",
-    "быстро", "срочно", "ладно", "ок", "окей",
-    "где", "как", "когда", "почему", "зачем", "какой", "какая",
-    "какое", "какие", "кто", "сколько", "есть",
-    "всё", "все", "любой", "любое", "любая", "любые", "что-нибудь",
-    "что-либо", "ничего", "нечто", "кое-что",
-    "просто", "нужен", "нужна", "нужно", "желательно",
-    "этот", "эта", "это", "эти", "тот", "та", "то", "те",
-    "такой", "такая", "такое", "такие",
-    "очень", "более", "менее", "слишком", "достаточно",
-    "можно", "нельзя", "следует", "стоит", "давайте"
-}
-
-
-def extract_keywords(query):
-    query = query.lower()
-    query = re.sub(r'[^\w\s\-_а-яё]', ' ', query)
-    words = query.split()
-    keywords = []
-    for word in words:
-        word_clean = word.strip()
-        if len(word_clean) < 2:
-            continue
-        if word_clean in STOP_WORDS:
-            continue
-        if word_clean not in keywords:
-            keywords.append(word_clean)
-    return keywords
-
-
-def search_file_by_name(query):
+# ============================================================
+# ПОИСК ПО ИМЕНИ ФАЙЛА
+# ============================================================
+def search_by_keyword(keyword):
+    """Ищет файлы, содержащие ключевое слово в названии."""
     if not os.path.exists(DOCS_DIR):
         return []
-
-    keywords = extract_keywords(query)
-
-    if not keywords:
-        clean_query = re.sub(r'[^\w\s\-_а-яё]', ' ', query.lower())
-        keywords = [w for w in clean_query.split() if len(w) >= 2 and w not in STOP_WORDS]
     
-    if not keywords:
-        words = query.lower().split()
-        for w in reversed(words):
-            w = re.sub(r'[^\w\-_а-яё]', '', w)
-            if len(w) >= 2:
-                keywords = [w]
-                break
-
-    if not keywords:
+    keyword = keyword.lower().strip()
+    if len(keyword) < 2:
         return []
-
+    
     matched = []
     for root, dirs, files in os.walk(DOCS_DIR):
         for f in files:
-            filename_lower = f.lower()
-            if all(kw in filename_lower for kw in keywords):
+            if keyword in f.lower():
                 rel_path = os.path.relpath(os.path.join(root, f), DOCS_DIR)
                 if rel_path not in matched:
                     matched.append(rel_path)
-
-    if not matched and len(keywords) > 1:
-        for root, dirs, files in os.walk(DOCS_DIR):
-            for f in files:
-                filename_lower = f.lower()
-                if any(kw in filename_lower for kw in keywords):
-                    rel_path = os.path.relpath(os.path.join(root, f), DOCS_DIR)
-                    if rel_path not in matched:
-                        matched.append(rel_path)
-
     return matched
 
 
-def get_archive_files_list():
+def search_all_files():
+    """Возвращает все файлы в архиве."""
     if not os.path.exists(DOCS_DIR):
         return []
     return [f for f in os.listdir(DOCS_DIR) if os.path.isfile(os.path.join(DOCS_DIR, f))]
 
 
+def get_archive_files_list():
+    return search_all_files()
+
+
+# ============================================================
+# КЛИЕНТ GIGACHAT
+# ============================================================
 @st.cache_resource
 def get_client():
     return GigaChat(credentials=client_secret, verify_ssl_certs=False)
 
 
 client = get_client()
-
-
-def build_system_instruction():
-    files_list = get_archive_files_list()
-
-    if files_list:
-        files_str = "\n".join(["- " + f for f in files_list])
-        files_section = "ДОСТУПНЫЕ ФАЙЛЫ В АРХИВЕ:\n" + files_str + "\n"
-    else:
-        files_section = "ВНИМАНИЕ: АРХИВ ПУСТ. Файлов нет.\n"
-
-    instruction = "Ты — дружелюбный ассистент файлового архива.\n\n"
-    instruction += files_section + "\n"
-    instruction += "ПРАВИЛА:\n"
-    instruction += "1. Отвечай живо и по-человечески, как хороший помощник.\n"
-    instruction += "2. Если файлы найдены — кратко опиши, что нашёл.\n"
-    instruction += "3. Если файлов нет — скажи об этом вежливо и предложи уточнить запрос.\n"
-    instruction += "4. НЕ используй маркеры [DOWNLOAD:...] — кнопки создаются автоматически.\n"
-    instruction += "5. Можешь использовать эмодзи для живости.\n"
-
-    return instruction
-
-
-if "messages" not in st.session_state:
-    st.session_state.messages = []
 
 
 def extract_text(response):
@@ -263,6 +247,127 @@ def extract_text(response):
     return str(response)
 
 
+def call_gigachat(system_prompt, user_prompt, temperature=0.3):
+    """Универсальная функция вызова GigaChat."""
+    msgs = [
+        ChatMessage(role="system", content=system_prompt),
+        ChatMessage(role="user", content=user_prompt)
+    ]
+    
+    payload = ChatCompletionRequest(
+        model="GigaChat-3-Ultra",
+        messages=msgs,
+        temperature=temperature
+    )
+    
+    response = client.chat.create(payload)
+    
+    return extract_text(response)
+
+
+# ============================================================
+# ШАГ 1: АНАЛИЗ ЗАПРОСА ИИ-ОЙ
+# ============================================================
+def analyze_query_with_ai(query, files_list):
+    files_str = "\n".join(["- " + f for f in files_list]) if files_list else "(архив пуст)"
+    
+    system_prompt = """Ты — аналитик поисковых запросов для файлового архива.
+Твоя задача: проанализировать запрос пользователя и предложить СПИСОК поисковых фраз (ключевых слов), 
+по которым нужно искать файлы в архиве.
+
+ПРАВИЛА:
+1. Верни ТОЛЬКО JSON-массив строк. Никакого другого текста.
+2. Предложи от 2 до 5 поисковых фраз.
+3. Включи:
+   - Прямые слова из запроса
+   - Синонимы и похожие слова
+   - Возможные опечатки или варианты написания
+   - Типы файлов (расширения), если уместно
+4. Все фразы — в нижнем регистре.
+5. Каждая фраза — короткая (1-2 слова).
+
+ПРИМЕРЫ:
+Запрос: "Какие есть презентации?"
+Ответ: ["презентация", "презентации", "pptx", "слайды", "доклад"]
+
+Запрос: "найди отчет по продажам за 2024"
+Ответ: ["отчет", "отчёт", "продажи", "2024", "xlsx", "csv"]
+
+Запрос: "документ про закон Ньютона"
+Ответ: ["закон", "ньютон", "физика", "документ", "docx", "pdf"]"""
+
+    user_prompt = "Запрос пользователя: '" + query + "'\n\nФайлы в архиве:\n" + files_str + "\n\nВерни JSON-массив поисковых фраз:"
+    
+    try:
+        response_text = call_gigachat(system_prompt, user_prompt, temperature=0.3)
+        
+        json_match = re.search(r'\[.*?\]', response_text, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(0)
+            keywords = json.loads(json_str)
+            if isinstance(keywords, list) and len(keywords) > 0:
+                return [str(k).strip().lower() for k in keywords if isinstance(k, str) and len(str(k).strip()) >= 2]
+    except Exception as e:
+        print("⚠️ Ошибка парсинга JSON от ИИ: " + str(e))
+    
+    query_clean = re.sub(r'[^\w\s\-_а-яё]', ' ', query.lower())
+    words = [w for w in query_clean.split() if len(w) >= 2]
+    return words[:5] if words else [query.lower().strip()]
+
+
+# ============================================================
+# ШАГ 2: УМНЫЙ ПОИСК
+# ============================================================
+def smart_search(query):
+    files_list = get_archive_files_list()
+    
+    if not files_list:
+        return [], []
+    
+    search_phrases = analyze_query_with_ai(query, files_list)
+    
+    all_found = []
+    for phrase in search_phrases:
+        found = search_by_keyword(phrase)
+        for f in found:
+            if f not in all_found:
+                all_found.append(f)
+    
+    return search_phrases, all_found
+
+
+# ============================================================
+# ШАГ 3: ГЕНЕРАЦИЯ ФИНАЛЬНОГО ОТВЕТА
+# ============================================================
+def generate_final_answer(query, search_phrases, found_files, all_files):
+    if found_files:
+        files_str = "\n".join(["- " + f for f in found_files])
+        phrases_str = ", ".join(search_phrases)
+        
+        system_prompt = """Ты — дружелюбный ассистент файлового архива.
+Отвечай живо, по-человечески, можешь использовать эмодзи.
+Кратко опиши, что нашёл."""
+        
+        user_prompt = "Пользователь спросил: '" + query + "'\n\n"
+        user_prompt += "Я искал по фразам: " + phrases_str + "\n"
+        user_prompt += "Нашёл " + str(len(found_files)) + " файл(ов):\n" + files_str + "\n\n"
+        user_prompt += "Кратко и дружелюбно подтверди находку."
+    else:
+        system_prompt = """Ты — дружелюбный ассистент файлового архива.
+Отвечай живо, по-человечески, можешь использовать эмодзи.
+Если ничего не найдено — скажи об этом вежливо и предложи уточнить запрос."""
+        
+        user_prompt = "Пользователь спросил: '" + query + "'\n\n"
+        user_prompt += "Я искал по фразам: " + ", ".join(search_phrases) + "\n"
+        user_prompt += "Но ничего не нашёл в архиве.\n\n"
+        user_prompt += "Вежливо скажи, что ничего не найдено, и предложи уточнить запрос."
+    
+    return call_gigachat(system_prompt, user_prompt, temperature=0.5)
+
+
+# ============================================================
+# РЕНДЕРИНГ КНОПОК СКАЧИВАНИЯ
+# ============================================================
 def render_download_buttons(files, prefix=""):
     for idx, filename in enumerate(files):
         filepath = os.path.join(DOCS_DIR, filename)
@@ -278,11 +383,20 @@ def render_download_buttons(files, prefix=""):
                 )
 
 
+# ============================================================
+# ОТОБРАЖЕНИЕ ИСТОРИИ
+# ============================================================
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
 for idx, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
 
+# ============================================================
+# ОБРАБОТКА ВВОДА ПОЛЬЗОВАТЕЛЯ
+# ============================================================
 if q := st.chat_input("Например: помоги найти отчёт по продажам..."):
     st.session_state.messages.append({"role": "user", "content": q})
     with st.chat_message("user"):
@@ -290,45 +404,20 @@ if q := st.chat_input("Например: помоги найти отчёт по
 
     with st.chat_message("assistant"):
         try:
-            found_files = search_file_by_name(q)
-            keywords = extract_keywords(q)
-            system_prompt = build_system_instruction()
-
-            if found_files:
-                files_str = "\n".join(["- " + f for f in found_files])
-                user_prompt = "Запрос пользователя: '" + q + "'\n"
-                user_prompt += "Ключевые слова для поиска: " + ", ".join(keywords) + "\n"
-                user_prompt += "Найдено файлов: " + str(len(found_files)) + "\n"
-                user_prompt += files_str + "\n\n"
-                user_prompt += "Кратко и дружелюбно подтверди, что нашёл эти файлы."
-            else:
-                user_prompt = "Запрос пользователя: '" + q + "'\n"
-                user_prompt += "Ключевые слова: " + ", ".join(keywords) + "\n"
-                user_prompt += "Файлы не найдены.\n\n"
-                user_prompt += "Вежливо скажи, что ничего не нашёл, и предложи уточнить запрос."
-
-            msgs = [ChatMessage(role="system", content=system_prompt)]
-            for m in st.session_state.messages:
-                msgs.append(ChatMessage(role=m["role"], content=m["content"]))
-            msgs.append(ChatMessage(role="user", content=user_prompt))
-
-            payload = ChatCompletionRequest(
-                model="GigaChat-3-Ultra",
-                messages=msgs,
-                temperature=0.5
-            )
-
-            response = client.chat.create(payload)
-            text = extract_text(response)
-
-            st.markdown(text)
+            with st.spinner("🔍 Анализирую запрос и ищу файлы..."):
+                search_phrases, found_files = smart_search(q)
+                all_files = get_archive_files_list()
+                answer_text = generate_final_answer(q, search_phrases, found_files, all_files)
+            
+            st.markdown(answer_text)
 
             if found_files:
                 st.markdown("---")
                 st.markdown("**📎 Найдено файлов: " + str(len(found_files)) + "**")
                 render_download_buttons(found_files, "new_")
 
-            st.session_state.messages.append({"role": "assistant", "content": text})
+            st.session_state.messages.append({"role": "assistant", "content": answer_text})
 
         except Exception as e:
             st.error("Ошибка: " + str(e))
+            print("❌ ОШИБКА: " + str(e))
