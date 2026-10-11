@@ -51,7 +51,7 @@ if not os.path.exists(DOCS_DIR):
 # АДМИН-ПАНЕЛЬ
 # ============================================================
 st.sidebar.markdown("---")
-st.sidebar.header(" Вход для администратора")
+st.sidebar.header("🔐 Вход для администратора")
 
 if "is_admin" not in st.session_state:
     st.session_state.is_admin = False
@@ -65,7 +65,7 @@ if not st.session_state.is_admin:
             st.sidebar.success("✅ Вход выполнен!")
             st.rerun()
         else:
-            st.sidebar.error(" Неверный пароль")
+            st.sidebar.error("❌ Неверный пароль")
 else:
     st.sidebar.success("✅ Вы вошли как администратор")
 
@@ -110,7 +110,7 @@ else:
                         extracted_count = len(rar_ref.namelist())
                     os.remove(filepath)
                 except ImportError:
-                    st.sidebar.warning("️ Для RAR нужна библиотека rarfile")
+                    st.sidebar.warning("⚠️ Для RAR нужна библиотека rarfile")
                     return 0
             
             elif filename.endswith('.7z'):
@@ -121,7 +121,7 @@ else:
                         extracted_count = len(sz_ref.getnames())
                     os.remove(filepath)
                 except ImportError:
-                    st.sidebar.warning("️ Для 7Z нужна библиотека py7zr")
+                    st.sidebar.warning("⚠️ Для 7Z нужна библиотека py7zr")
                     return 0
             
             if extracted_count > 0:
@@ -185,49 +185,34 @@ st.sidebar.markdown("---")
 
 
 # ============================================================
-# НОРМАЛИЗАЦИЯ СЛОВ (отсечение окончаний)
+# НОРМАЛИЗАЦИЯ: генерация вариантов слова
 # ============================================================
 def get_word_variants(word):
     """
-    Возвращает список вариантов слова для поиска:
-    само слово + слово без типичных русских окончаний.
-    
+    Возвращает список вариантов слова для поиска.
     Пример: "презентации" → ["презентации", "презентаци", "презентац", "презента"]
     """
     word = word.lower().strip()
+    if len(word) < 2:
+        return []
+    
     variants = [word]
     
-    # Типичные русские окончания для отсечения
-    endings_to_strip = [
-        "ия", "ии", "ие", "ию", "ей", "ям", "ях", "ами", "ями",
-        "ы", "и", "а", "я", "у", "ю", "ом", "ем", "ах", "ях", 
-        "ам", "ям", "ов", "ев", "ий", "ые", "ых", "ым",
-        "ого", "его", "ому", "ему", "ой", "ей", "ая", "яя",
-        "ость", "ство", "ние", "тие", "ция", "сия",
-        " presentations", "s"  # английские окончания
-    ]
-    
-    for ending in endings_to_strip:
-        if word.endswith(ending) and len(word) - len(ending) >= 4:
-            stripped = word[:-len(ending)]
+    # Отсекаем по 1, 2, 3, 4 последних символа (если слово достаточно длинное)
+    for i in range(1, 5):
+        if len(word) - i >= 4:
+            stripped = word[:-i]
             if stripped not in variants:
                 variants.append(stripped)
-    
-    # Также добавляем варианты с отсечением 1-2 последних символов (для надёжности)
-    for i in range(1, 3):
-        if len(word) - i >= 4:
-            short = word[:-i]
-            if short not in variants:
-                variants.append(short)
     
     return variants
 
 
 # ============================================================
-# ПОИСК ПО КЛЮЧЕВОМУ СЛОВУ С НОРМАЛИЗАЦИЕЙ
+# ПОИСК С НОРМАЛИЗАЦИЕЙ
 # ============================================================
 def search_by_keyword(keyword):
-    """Ищет файлы по ключевому слову с учётом нормализации (окончаний)."""
+    """Ищет файлы по ключевому слову с нормализацией."""
     if not os.path.exists(DOCS_DIR):
         return []
     
@@ -235,29 +220,26 @@ def search_by_keyword(keyword):
     if len(keyword) < 2:
         return []
     
-    # Генерируем варианты слова (с отсечёнными окончаниями)
     variants = get_word_variants(keyword)
     
     matched = []
     for root, dirs, files in os.walk(DOCS_DIR):
         for f in files:
             filename_lower = f.lower()
-            # Проверяем: содержит ли имя файла любой из вариантов ключевого слова
-            if any(variant in filename_lower for variant in variants):
-                rel_path = os.path.relpath(os.path.join(root, f), DOCS_DIR)
-                if rel_path not in matched:
-                    matched.append(rel_path)
+            # Проверяем: содержит ли имя файла ЛЮБОЙ из вариантов
+            for variant in variants:
+                if variant in filename_lower:
+                    rel_path = os.path.relpath(os.path.join(root, f), DOCS_DIR)
+                    if rel_path not in matched:
+                        matched.append(rel_path)
+                    break
     return matched
 
 
-def search_all_files():
+def get_archive_files_list():
     if not os.path.exists(DOCS_DIR):
         return []
     return [f for f in os.listdir(DOCS_DIR) if os.path.isfile(os.path.join(DOCS_DIR, f))]
-
-
-def get_archive_files_list():
-    return search_all_files()
 
 
 # ============================================================
@@ -294,43 +276,29 @@ def call_gigachat(system_prompt, user_prompt, temperature=0.3):
     )
     
     response = client.chat.create(payload)
-    
     return extract_text(response)
 
 
 # ============================================================
-# ШАГ 1: АНАЛИЗ ЗАПРОСА ИИ-ОЙ
+# АНАЛИЗ ЗАПРОСА ИИ
 # ============================================================
 def analyze_query_with_ai(query, files_list):
     files_str = "\n".join(["- " + f for f in files_list]) if files_list else "(архив пуст)"
     
-    system_prompt = """Ты — аналитик поисковых запросов для файлового архива.
-Твоя задача: проанализировать запрос пользователя и предложить СПИСОК поисковых фраз (ключевых слов), 
-по которым нужно искать файлы в архиве.
+    system_prompt = """Ты — аналитик поисковых запросов.
+Верни ТОЛЬКО JSON-массив строк (поисковых фраз). Без лишнего текста.
 
 ПРАВИЛА:
-1. Верни ТОЛЬКО JSON-массив строк. Никакого другого текста.
-2. Предложи от 3 до 6 поисковых фраз.
-3. ОБЯЗАТЕЛЬНО включи прямые слова из запроса пользователя (в единственном числе, без окончаний).
-4. Добавь синонимы и похожие слова.
-5. Добавь типы файлов (расширения), если уместно.
-6. Все фразы — в нижнем регистре, в единственном числе.
-7. Каждая фраза — короткая (1-2 слова).
+1. От 3 до 6 фраз.
+2. Включи прямые слова из запроса в ЕДИНСТВЕННОМ числе.
+3. Добавь синонимы и расширения файлов.
+4. Все фразы — в нижнем регистре.
 
-ПРИМЕРЫ:
-Запрос: "Какие есть презентации?"
-Ответ: ["презентация", "pptx", "слайды", "доклад", "powerpoint"]
-
+ПРИМЕР:
 Запрос: "привет найди мне презентации"
-Ответ: ["презентация", "pptx", "слайды", "доклад"]
+Ответ: ["презентация", "pptx", "слайды", "доклад", "powerpoint"]"""
 
-Запрос: "найди отчет по продажам за 2024"
-Ответ: ["отчет", "отчёт", "продажа", "2024", "xlsx", "csv"]
-
-Запрос: "документ про закон Ньютона"
-Ответ: ["закон", "ньютон", "физика", "документ", "docx", "pdf"]"""
-
-    user_prompt = "Запрос пользователя: '" + query + "'\n\nФайлы в архиве:\n" + files_str + "\n\nВерни JSON-массив поисковых фраз:"
+    user_prompt = "Запрос: '" + query + "'\n\nФайлы в архиве:\n" + files_str + "\n\nВерни JSON:"
     
     try:
         response_text = call_gigachat(system_prompt, user_prompt, temperature=0.3)
@@ -342,54 +310,74 @@ def analyze_query_with_ai(query, files_list):
             if isinstance(keywords, list) and len(keywords) > 0:
                 return [str(k).strip().lower() for k in keywords if isinstance(k, str) and len(str(k).strip()) >= 2]
     except Exception as e:
-        print("⚠️ Ошибка парсинга JSON от ИИ: " + str(e))
+        print("⚠️ Ошибка парсинга JSON: " + str(e))
     
-    # Fallback: простой парсинг
-    stop_words = {"привет", "помоги", "найди", "найти", "покажи", "мне", "я", "хочу", "чтобы", "ты", "есть", "какие"}
+    # Fallback
+    stop_words = {"привет", "помоги", "найди", "найти", "покажи", "мне", "я", "хочу", "чтобы", "ты", "есть", "какие", "и", "а", "но", "в", "на", "по"}
     query_clean = re.sub(r'[^\w\s\-_а-яё]', ' ', query.lower())
     words = [w for w in query_clean.split() if len(w) >= 2 and w not in stop_words]
     return words[:5] if words else [query.lower().strip()]
 
 
 # ============================================================
-# ШАГ 2: УМНЫЙ ПОИСК С НОРМАЛИЗАЦИЕЙ
+# УМНЫЙ ПОИСК С ОТЛАДКОЙ
 # ============================================================
 def smart_search(query):
     files_list = get_archive_files_list()
     
     if not files_list:
-        return [], []
+        return [], [], "Архив пуст"
     
-    # Шаг 1: ИИ генерирует поисковые фразы
+    debug_info = []
+    
+    # Шаг 1: ИИ генерирует фразы
     search_phrases = analyze_query_with_ai(query, files_list)
+    debug_info.append(" ИИ предложил фразы: " + ", ".join(search_phrases))
     
-    # Шаг 2: Ищем по каждой фразе (с нормализацией окончаний)
+    # Шаг 2: Ищем по каждой фразе
     all_found = []
     for phrase in search_phrases:
+        variants = get_word_variants(phrase)
+        debug_info.append("🔍 Ищем '" + phrase + "' → варианты: " + ", ".join(variants))
+        
         found = search_by_keyword(phrase)
+        if found:
+            debug_info.append("   ✅ Найдено: " + ", ".join(found))
+        else:
+            debug_info.append("   ❌ Не найдено")
+        
         for f in found:
             if f not in all_found:
                 all_found.append(f)
     
-    # Шаг 3: Fallback — если ничего не нашли, ищем по всем словам запроса
+    # Шаг 3: Fallback — прямой поиск по словам запроса
     if not all_found:
+        debug_info.append("️ Ничего не нашли, делаем fallback-поиск...")
         stop_words = {"привет", "помоги", "найди", "найти", "покажи", "мне", "я", "хочу", "чтобы", "ты", "есть", "какие", "и", "а", "но", "в", "на", "по", "с", "из", "от", "до", "за", "к", "у"}
         query_clean = re.sub(r'[^\w\s\-_а-яё]', ' ', query.lower())
         fallback_words = [w for w in query_clean.split() if len(w) >= 2 and w not in stop_words]
         
         for word in fallback_words:
+            variants = get_word_variants(word)
+            debug_info.append(" Fallback: ищем '" + word + "' → варианты: " + ", ".join(variants))
+            
             found = search_by_keyword(word)
+            if found:
+                debug_info.append("   ✅ Найдено: " + ", ".join(found))
+            
             for f in found:
                 if f not in all_found:
                     all_found.append(f)
     
-    return search_phrases, all_found
+    debug_text = "\n".join(debug_info)
+    
+    return search_phrases, all_found, debug_text
 
 
 # ============================================================
-# ШАГ 3: ГЕНЕРАЦИЯ ФИНАЛЬНОГО ОТВЕТА
+# ГЕНЕРАЦИЯ ОТВЕТА
 # ============================================================
-def generate_final_answer(query, search_phrases, found_files, all_files):
+def generate_final_answer(query, search_phrases, found_files):
     if found_files:
         files_str = "\n".join(["- " + f for f in found_files])
         phrases_str = ", ".join(search_phrases)
@@ -399,24 +387,21 @@ def generate_final_answer(query, search_phrases, found_files, all_files):
 Кратко опиши, что нашёл."""
         
         user_prompt = "Пользователь спросил: '" + query + "'\n\n"
-        user_prompt += "Я искал по фразам: " + phrases_str + "\n"
         user_prompt += "Нашёл " + str(len(found_files)) + " файл(ов):\n" + files_str + "\n\n"
         user_prompt += "Кратко и дружелюбно подтверди находку."
     else:
         system_prompt = """Ты — дружелюбный ассистент файлового архива.
-Отвечай живо, по-человечески, можешь использовать эмодзи.
-Если ничего не найдено — скажи об этом вежливо и предложи уточнить запрос."""
+Отвечай живо, по-человечески.
+Если ничего не найдено — скажи об этом вежливо."""
         
         user_prompt = "Пользователь спросил: '" + query + "'\n\n"
-        user_prompt += "Я искал по фразам: " + ", ".join(search_phrases) + "\n"
-        user_prompt += "Но ничего не нашёл в архиве.\n\n"
-        user_prompt += "Вежливо скажи, что ничего не найдено, и предложи уточнить запрос."
+        user_prompt += "Ничего не нашёл. Вежливо скажи об этом."
     
     return call_gigachat(system_prompt, user_prompt, temperature=0.5)
 
 
 # ============================================================
-# РЕНДЕРИНГ КНОПОК СКАЧИВАНИЯ
+# РЕНДЕРИНГ КНОПОК
 # ============================================================
 def render_download_buttons(files, prefix=""):
     for idx, filename in enumerate(files):
@@ -434,7 +419,7 @@ def render_download_buttons(files, prefix=""):
 
 
 # ============================================================
-# ОТОБРАЖЕНИЕ ИСТОРИИ
+# ИСТОРИЯ
 # ============================================================
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -445,7 +430,7 @@ for idx, msg in enumerate(st.session_state.messages):
 
 
 # ============================================================
-# ОБРАБОТКА ВВОДА ПОЛЬЗОВАТЕЛЯ
+# ВВОД ПОЛЬЗОВАТЕЛЯ
 # ============================================================
 if q := st.chat_input("Например: помоги найти отчёт по продажам..."):
     st.session_state.messages.append({"role": "user", "content": q})
@@ -455,11 +440,16 @@ if q := st.chat_input("Например: помоги найти отчёт по
     with st.chat_message("assistant"):
         try:
             with st.spinner("🔍 Анализирую запрос и ищу файлы..."):
-                search_phrases, found_files = smart_search(q)
-                all_files = get_archive_files_list()
-                answer_text = generate_final_answer(q, search_phrases, found_files, all_files)
+                search_phrases, found_files, debug_text = smart_search(q)
+                answer_text = generate_final_answer(q, search_phrases, found_files)
             
             st.markdown(answer_text)
+
+            # Показываем отладочную информацию
+            with st.expander("🔧 Отладка (как работал поиск)"):
+                st.code(debug_text, language="text")
+                st.markdown("**Все файлы в архиве:**")
+                st.markdown("\n".join(["- " + f for f in get_archive_files_list()]))
 
             if found_files:
                 st.markdown("---")
