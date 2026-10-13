@@ -13,8 +13,9 @@ def get_credentials():
     try:
         client_id = st.secrets["GIGACHAT_CLIENT_ID"]
         client_secret = st.secrets["GIGACHAT_CLIENT_SECRET"]
-        admin_password = st.secrets.get("ADMIN_PASSWORD", "")
-        return client_id, client_secret, admin_password
+        admin_password_1 = st.secrets.get("ADMIN_PASSWORD_1", "")
+        admin_password_2 = st.secrets.get("ADMIN_PASSWORD_2", "")
+        return client_id, client_secret, admin_password_1, admin_password_2
     except (KeyError, FileNotFoundError):
         pass
 
@@ -23,23 +24,24 @@ def get_credentials():
     raw_secret = os.getenv("GIGACHAT_CLIENT_SECRET")
 
     if not raw_id or not raw_secret:
-        return None, None, None
+        return None, None, None, None
 
     client_id = raw_id.strip().strip("'\"")
     client_secret = raw_secret.strip().strip("'\"")
-    admin_password = os.getenv("ADMIN_PASSWORD", "")
+    admin_password_1 = os.getenv("ADMIN_PASSWORD_1", "")
+    admin_password_2 = os.getenv("ADMIN_PASSWORD_2", "")
 
-    return client_id, client_secret, admin_password
+    return client_id, client_secret, admin_password_1, admin_password_2
 
 
-client_id, client_secret, admin_password = get_credentials()
+client_id, client_secret, admin_password_1, admin_password_2 = get_credentials()
 
 if not client_id or not client_secret:
     st.error("Ошибка: Ключи GigaChat не найдены!")
     st.stop()
 
-st.set_page_config(page_title="ИИ Файловый Менеджер", page_icon="️", layout="wide")
-st.title("️ ИИ-Агент для поиска файлов")
+st.set_page_config(page_title="ИИ Файловый Менеджер", page_icon="🗂️", layout="wide")
+st.title("🗂️ ИИ-Агент для поиска файлов")
 st.write("Загрузите архив или файлы — я всё найду!")
 
 DOCS_DIR = "my_documents"
@@ -60,7 +62,7 @@ if not st.session_state.is_admin:
     password_input = st.sidebar.text_input("Введите пароль администратора:", type="password")
 
     if st.sidebar.button("Войти"):
-        if password_input == admin_password:
+        if password_input == admin_password_1 or password_input == admin_password_2:
             st.session_state.is_admin = True
             st.sidebar.success("✅ Вход выполнен!")
             st.rerun()
@@ -74,7 +76,7 @@ else:
         st.rerun()
 
     st.sidebar.markdown("---")
-    st.sidebar.header("📤 Загрузка файлов и архивов")
+    st.sidebar.header(" Загрузка файлов и архивов")
     st.sidebar.info("Поддерживаются: ZIP, TAR, TAR.GZ, RAR, 7Z, а также обычные файлы")
 
     uploaded_files = st.sidebar.file_uploader(
@@ -110,7 +112,7 @@ else:
                         extracted_count = len(rar_ref.namelist())
                     os.remove(filepath)
                 except ImportError:
-                    st.sidebar.warning("⚠️ Для RAR нужна библиотека rarfile")
+                    st.sidebar.warning("️ Для RAR нужна библиотека rarfile")
                     return 0
             
             elif filename.endswith('.7z'):
@@ -121,7 +123,7 @@ else:
                         extracted_count = len(sz_ref.getnames())
                     os.remove(filepath)
                 except ImportError:
-                    st.sidebar.warning("⚠️ Для 7Z нужна библиотека py7zr")
+                    st.sidebar.warning("️ Для 7Z нужна библиотека py7zr")
                     return 0
             
             if extracted_count > 0:
@@ -170,7 +172,7 @@ else:
             all_files_recursive.append(rel_path)
     
     if all_files_recursive:
-        st.sidebar.markdown("**📁 В архиве (" + str(len(all_files_recursive)) + " файлов):**")
+        st.sidebar.markdown("** В архиве (" + str(len(all_files_recursive)) + " файлов):**")
         for fname in all_files_recursive:
             full_path = os.path.join(DOCS_DIR, fname)
             fsize = os.path.getsize(full_path)
@@ -195,7 +197,7 @@ st.sidebar.markdown("---")
 
 
 # ============================================================
-# НОРМАЛИЗАЦИЯ: генерация вариантов слова
+# НОРМАЛИЗАЦИЯ
 # ============================================================
 def get_word_variants(word):
     word = word.lower().strip()
@@ -319,12 +321,10 @@ def analyze_query_with_ai(query, files_list):
             keywords = json.loads(json_str)
             if isinstance(keywords, list) and len(keywords) > 0:
                 result = [str(k).strip().lower() for k in keywords if isinstance(k, str) and len(str(k).strip()) >= 2]
-                # Жёсткое ограничение: не больше 3 фраз
                 return result[:3]
     except Exception as e:
         print("⚠️ Ошибка парсинга JSON: " + str(e))
     
-    # Fallback
     stop_words = {"привет", "помоги", "найди", "найти", "покажи", "мне", "я", "хочу", "чтобы", "ты", "есть", "какие", "и", "а", "но", "в", "на", "по"}
     query_clean = re.sub(r'[^\w\s\-_а-яё]', ' ', query.lower())
     words = [w for w in query_clean.split() if len(w) >= 2 and w not in stop_words]
@@ -332,7 +332,7 @@ def analyze_query_with_ai(query, files_list):
 
 
 # ============================================================
-# УМНЫЙ ПОИСК С ОТЛАДКОЙ
+# УМНЫЙ ПОИСК
 # ============================================================
 def smart_search(query):
     files_list = get_all_files_recursive()
@@ -341,7 +341,7 @@ def smart_search(query):
         return [], [], "Архив пуст"
     
     debug_info = []
-    debug_info.append("📁 Всего файлов в архиве: " + str(len(files_list)))
+    debug_info.append(" Всего файлов в архиве: " + str(len(files_list)))
     
     search_phrases = analyze_query_with_ai(query, files_list)
     debug_info.append("🤖 ИИ предложил фразы: " + ", ".join(search_phrases))
@@ -362,7 +362,7 @@ def smart_search(query):
                 all_found.append(f)
     
     if not all_found:
-        debug_info.append("️ Ничего не нашли, делаем fallback-поиск...")
+        debug_info.append("⚠️ Ничего не нашли, делаем fallback-поиск...")
         stop_words = {"привет", "помоги", "найди", "найти", "покажи", "мне", "я", "хочу", "чтобы", "ты", "есть", "какие", "и", "а", "но", "в", "на", "по", "с", "из", "от", "до", "за", "к", "у"}
         query_clean = re.sub(r'[^\w\s\-_а-яё]', ' ', query.lower())
         fallback_words = [w for w in query_clean.split() if len(w) >= 2 and w not in stop_words]
@@ -420,7 +420,7 @@ def render_download_buttons(files, prefix=""):
         if os.path.exists(filepath):
             with open(filepath, "rb") as f:
                 st.download_button(
-                    label="📥 Скачать: " + filename,
+                    label=" Скачать: " + filename,
                     data=f.read(),
                     file_name=os.path.basename(filename),
                     key=key
@@ -454,7 +454,7 @@ if q := st.chat_input("Например: помоги найти отчёт по
             
             st.markdown(answer_text)
 
-            with st.expander("🔧 Отладка (как работал поиск)"):
+            with st.expander(" Отладка (как работал поиск)"):
                 st.code(debug_text, language="text")
                 st.markdown("**Все файлы в архиве:**")
                 st.markdown("\n".join(["- " + f for f in get_all_files_recursive()]))
