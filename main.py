@@ -38,8 +38,8 @@ if not client_id or not client_secret:
     st.error("Ошибка: Ключи GigaChat не найдены!")
     st.stop()
 
-st.set_page_config(page_title="ИИ Файловый Менеджер", page_icon="🗂️", layout="wide")
-st.title("🗂️ ИИ-Агент для поиска файлов")
+st.set_page_config(page_title="ИИ Файловый Менеджер", page_icon="️", layout="wide")
+st.title("️ ИИ-Агент для поиска файлов")
 st.write("Загрузите архив или файлы — я всё найду!")
 
 DOCS_DIR = "my_documents"
@@ -69,7 +69,7 @@ if not st.session_state.is_admin:
 else:
     st.sidebar.success("✅ Вы вошли как администратор")
 
-    if st.sidebar.button(" Выйти"):
+    if st.sidebar.button("🚪 Выйти"):
         st.session_state.is_admin = False
         st.rerun()
 
@@ -124,7 +124,6 @@ else:
                     st.sidebar.warning("⚠️ Для 7Z нужна библиотека py7zr")
                     return 0
             
-            # Рекурсивная распаковка вложенных архивов
             if extracted_count > 0:
                 for item in os.listdir(extract_dir):
                     item_path = os.path.join(extract_dir, item)
@@ -159,12 +158,11 @@ else:
                 if extracted > 0:
                     st.sidebar.success("✅ Распакован " + filename + " (" + str(extracted) + " файлов)")
                 else:
-                    st.sidebar.warning("️ " + filename + " не удалось распаковать")
+                    st.sidebar.warning("⚠️ " + filename + " не удалось распаковать")
             else:
                 size_str = str(len(file_bytes)) + " байт" if len(file_bytes) > 0 else "пустой"
                 st.sidebar.success("✅ " + filename + " (" + size_str + ")")
 
-    # ✅ ИСПРАВЛЕНИЕ: Рекурсивный сбор всех файлов из ВСЕХ подпапок
     all_files_recursive = []
     for root, dirs, files in os.walk(DOCS_DIR):
         for f in files:
@@ -177,7 +175,6 @@ else:
             full_path = os.path.join(DOCS_DIR, fname)
             fsize = os.path.getsize(full_path)
             size_str = str(fsize) + " байт" if fsize > 0 else "пустой"
-            # Показываем путь относительно DOCS_DIR
             st.sidebar.text("  • " + fname + " (" + size_str + ")")
     else:
         st.sidebar.warning("Архив пуст")
@@ -187,7 +184,10 @@ else:
             for f in files:
                 os.remove(os.path.join(root, f))
             for d in dirs:
-                os.rmdir(os.path.join(root, d))
+                try:
+                    os.rmdir(os.path.join(root, d))
+                except:
+                    pass
         st.sidebar.success("Архив очищен!")
         st.rerun()
 
@@ -204,7 +204,6 @@ def get_word_variants(word):
     
     variants = [word]
     
-    # Отсекаем по 1, 2, 3, 4 последних символа
     for i in range(1, 5):
         if len(word) - i >= 4:
             stripped = word[:-i]
@@ -215,10 +214,9 @@ def get_word_variants(word):
 
 
 # ============================================================
-# РЕКУРСИВНЫЙ ПОИСК ПО ВСЕМ ПОДПАПКАМ
+# РЕКУРСИВНЫЙ ПОИСК
 # ============================================================
 def search_by_keyword(keyword):
-    """Рекурсивно ищет файлы по ключевому слову во ВСЕХ подпапках."""
     if not os.path.exists(DOCS_DIR):
         return []
     
@@ -229,7 +227,6 @@ def search_by_keyword(keyword):
     variants = get_word_variants(keyword)
     
     matched = []
-    # os.walk рекурсивно обходит ВСЕ подпапки
     for root, dirs, files in os.walk(DOCS_DIR):
         for f in files:
             filename_lower = f.lower()
@@ -243,7 +240,6 @@ def search_by_keyword(keyword):
 
 
 def get_all_files_recursive():
-    """Возвращает ВСЕ файлы рекурсивно из всех подпапок."""
     if not os.path.exists(DOCS_DIR):
         return []
     result = []
@@ -292,25 +288,27 @@ def call_gigachat(system_prompt, user_prompt, temperature=0.3):
 
 
 # ============================================================
-# АНАЛИЗ ЗАПРОСА ИИ
+# АНАЛИЗ ЗАПРОСА ИИ (МАКСИМУМ 3 ФРАЗЫ)
 # ============================================================
 def analyze_query_with_ai(query, files_list):
     files_str = "\n".join(["- " + f for f in files_list]) if files_list else "(архив пуст)"
     
-    system_prompt = """Ты — аналитик поисковых запросов.
-Верни ТОЛЬКО JSON-массив строк (поисковых фраз). Без лишнего текста.
+    system_prompt = """Ты — парсер поисковых запросов. Верни СТРОГО JSON-массив из 1-3 ключевых слов для поиска.
 
 ПРАВИЛА:
-1. От 3 до 6 фраз.
-2. Включи прямые слова из запроса в ЕДИНСТВЕННОМ числе.
-3. Добавь синонимы и расширения файлов.
-4. Все фразы — в нижнем регистре.
+1. Отбрось служебные слова (привет, найди, покажи, мне, я, хочу, есть, какие).
+2. Оставь только слова из запроса пользователя в единственном числе.
+3. МАКСИМУМ 3 фразы. НЕ выдумывай синонимы, которых нет в запросе.
+4. Добавляй расширения файлов (pptx, xlsx, pdf) только если они ОЧЕВИДНО подразумеваются.
+5. Только JSON, без лишнего текста.
 
-ПРИМЕР:
-Запрос: "привет найди мне презентации"
-Ответ: ["презентация", "pptx", "слайды", "доклад", "powerpoint"]"""
+ПРИМЕРЫ:
+"найди презентации" → ["презентация", "pptx"]
+"отчет по продажам" → ["отчет", "продажа"]
+"текстовые файлы" → ["текстовый файл", "txt"]
+"закон Ньютона" → ["закон", "ньютон"]"""
 
-    user_prompt = "Запрос: '" + query + "'\n\nФайлы в архиве:\n" + files_str + "\n\nВерни JSON:"
+    user_prompt = "Запрос: '" + query + "'\n\nФайлы в архиве:\n" + files_str + "\n\nВерни JSON (1-3 фразы):"
     
     try:
         response_text = call_gigachat(system_prompt, user_prompt, temperature=0.3)
@@ -320,14 +318,17 @@ def analyze_query_with_ai(query, files_list):
             json_str = json_match.group(0)
             keywords = json.loads(json_str)
             if isinstance(keywords, list) and len(keywords) > 0:
-                return [str(k).strip().lower() for k in keywords if isinstance(k, str) and len(str(k).strip()) >= 2]
+                result = [str(k).strip().lower() for k in keywords if isinstance(k, str) and len(str(k).strip()) >= 2]
+                # Жёсткое ограничение: не больше 3 фраз
+                return result[:3]
     except Exception as e:
         print("⚠️ Ошибка парсинга JSON: " + str(e))
     
+    # Fallback
     stop_words = {"привет", "помоги", "найди", "найти", "покажи", "мне", "я", "хочу", "чтобы", "ты", "есть", "какие", "и", "а", "но", "в", "на", "по"}
     query_clean = re.sub(r'[^\w\s\-_а-яё]', ' ', query.lower())
     words = [w for w in query_clean.split() if len(w) >= 2 and w not in stop_words]
-    return words[:5] if words else [query.lower().strip()]
+    return words[:3] if words else [query.lower().strip()]
 
 
 # ============================================================
@@ -343,7 +344,7 @@ def smart_search(query):
     debug_info.append("📁 Всего файлов в архиве: " + str(len(files_list)))
     
     search_phrases = analyze_query_with_ai(query, files_list)
-    debug_info.append(" ИИ предложил фразы: " + ", ".join(search_phrases))
+    debug_info.append("🤖 ИИ предложил фразы: " + ", ".join(search_phrases))
     
     all_found = []
     for phrase in search_phrases:
@@ -361,7 +362,7 @@ def smart_search(query):
                 all_found.append(f)
     
     if not all_found:
-        debug_info.append("⚠️ Ничего не нашли, делаем fallback-поиск...")
+        debug_info.append("️ Ничего не нашли, делаем fallback-поиск...")
         stop_words = {"привет", "помоги", "найди", "найти", "покажи", "мне", "я", "хочу", "чтобы", "ты", "есть", "какие", "и", "а", "но", "в", "на", "по", "с", "из", "от", "до", "за", "к", "у"}
         query_clean = re.sub(r'[^\w\s\-_а-яё]', ' ', query.lower())
         fallback_words = [w for w in query_clean.split() if len(w) >= 2 and w not in stop_words]
