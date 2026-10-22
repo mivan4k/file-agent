@@ -41,7 +41,7 @@ if not client_id or not client_secret:
     st.stop()
 
 st.set_page_config(page_title="ИИ Файловый Менеджер", page_icon="🗂️", layout="wide")
-st.title("🗂️ ИИ-Агент для поиска файлов")
+st.title("️ ИИ-Агент для поиска файлов")
 st.write("Загрузите архив или файлы — я всё найду!")
 
 DOCS_DIR = "my_documents"
@@ -49,6 +49,9 @@ if not os.path.exists(DOCS_DIR):
     os.makedirs(DOCS_DIR)
 
 
+# ============================================================
+# АДМИН-ПАНЕЛЬ
+# ============================================================
 st.sidebar.markdown("---")
 st.sidebar.header("🔐 Вход для администратора")
 
@@ -68,12 +71,12 @@ if not st.session_state.is_admin:
 else:
     st.sidebar.success("✅ Вы вошли как администратор")
 
-    if st.sidebar.button("🚪 Выйти"):
+    if st.sidebar.button(" Выйти"):
         st.session_state.is_admin = False
         st.rerun()
 
     st.sidebar.markdown("---")
-    st.sidebar.header("📤 Загрузка файлов и архивов")
+    st.sidebar.header(" Загрузка файлов и архивов")
     st.sidebar.info("Поддерживаются: ZIP, TAR, TAR.GZ, RAR, 7Z, а также обычные файлы")
 
     uploaded_files = st.sidebar.file_uploader(
@@ -120,7 +123,7 @@ else:
                         extracted_count = len(sz_ref.getnames())
                     os.remove(filepath)
                 except ImportError:
-                    st.sidebar.warning("⚠️ Для 7Z нужна библиотека py7zr")
+                    st.sidebar.warning("️ Для 7Z нужна библиотека py7zr")
                     return 0
             
             if extracted_count > 0:
@@ -193,6 +196,9 @@ else:
 st.sidebar.markdown("---")
 
 
+# ============================================================
+# НОРМАЛИЗАЦИЯ ТЕКСТА
+# ============================================================
 def normalize_text(text):
     return text.lower().strip().replace('ё', 'е')
 
@@ -213,6 +219,9 @@ def get_word_variants(word):
     return variants
 
 
+# ============================================================
+# РЕКУРСИВНЫЙ ПОИСК
+# ============================================================
 def search_by_keyword(keyword):
     if not os.path.exists(DOCS_DIR):
         return []
@@ -247,6 +256,9 @@ def get_all_files_recursive():
     return result
 
 
+# ============================================================
+# КЛИЕНТ GIGACHAT
+# ============================================================
 @st.cache_resource
 def get_client():
     return GigaChat(credentials=client_secret, verify_ssl_certs=False)
@@ -281,6 +293,9 @@ def call_gigachat(system_prompt, user_prompt, temperature=0.3):
     return extract_text(response)
 
 
+# ============================================================
+# АНАЛИЗ ЗАПРОСА ИИ (МАКСИМУМ 3 ФРАЗЫ)
+# ============================================================
 def analyze_query_with_ai(query, files_list):
     files_str = "\n".join(["- " + f for f in files_list]) if files_list else "(архив пуст)"
     
@@ -323,6 +338,9 @@ def analyze_query_with_ai(query, files_list):
     return words[:3] if words else [query.lower().strip().replace('ё', 'е')]
 
 
+# ============================================================
+# УМНЫЙ ПОИСК (с обработкой общих запросов)
+# ============================================================
 def smart_search(query):
     files_list = get_all_files_recursive()
     
@@ -332,8 +350,23 @@ def smart_search(query):
     debug_info = []
     debug_info.append("📁 Всего файлов в архиве: " + str(len(files_list)))
     
+    # ✅ Проверка на общий запрос ("покажи все", "что есть" и т.д.)
+    query_lower = normalize_text(query)
+    general_request_words = [
+        "все", "всё", "полный", "весь", "любой", "каждый",
+        "все файлы", "всё что", "что есть", "покажи все",
+        "показать все", "выведи все", "список", "полный список",
+        "что у тебя есть", "что имеется", "все документы"
+    ]
+    is_general_request = any(word in query_lower for word in general_request_words)
+    
+    if is_general_request:
+        debug_info.append("🌐 Общий запрос — возвращаем ВСЕ файлы")
+        return ["все файлы"], files_list, "\n".join(debug_info)
+    
+    # Обычный поиск через ИИ
     search_phrases = analyze_query_with_ai(query, files_list)
-    debug_info.append(" ИИ предложил фразы: " + ", ".join(search_phrases))
+    debug_info.append("🤖 ИИ предложил фразы: " + ", ".join(search_phrases))
     
     all_found = []
     for phrase in search_phrases:
@@ -350,6 +383,7 @@ def smart_search(query):
             if f not in all_found:
                 all_found.append(f)
     
+    # Fallback-поиск, если ничего не нашли
     if not all_found:
         debug_info.append("⚠️ Ничего не нашли, делаем fallback-поиск...")
         stop_words = {"привет", "помоги", "найди", "найти", "покажи", "мне", "я", "хочу", "чтобы", "ты", "есть", "какие", "и", "а", "но", "в", "на", "по", "с", "из", "от", "до", "за", "к", "у"}
@@ -373,14 +407,23 @@ def smart_search(query):
     return search_phrases, all_found, debug_text
 
 
-def generate_final_answer(query, search_phrases, found_files):
-    if found_files:
+# ============================================================
+# ГЕНЕРАЦИЯ ОТВЕТА
+# ============================================================
+def generate_final_answer(query, search_phrases, found_files, all_files):
+    is_general_request = (search_phrases == ["все файлы"])
+    
+    if is_general_request:
         files_str = "\n".join(["- " + f for f in found_files])
-        
+        system_prompt = """Ты — дружелюбный ассистент файлового архива.
+Отвечай живо, по-человечески, можешь использовать эмодзи.
+Пользователь попросил показать ВСЕ файлы. Перечисли их и скажи общее количество."""
+        user_prompt = "В архиве " + str(len(found_files)) + " файл(ов):\n" + files_str + "\n\nКратко и дружелюбно перечисли все файлы."
+    elif found_files:
+        files_str = "\n".join(["- " + f for f in found_files])
         system_prompt = """Ты — дружелюбный ассистент файлового архива.
 Отвечай живо, по-человечески, можешь использовать эмодзи.
 Кратко опиши, что нашёл."""
-        
         user_prompt = "Пользователь спросил: '" + query + "'\n\n"
         user_prompt += "Нашёл " + str(len(found_files)) + " файл(ов):\n" + files_str + "\n\n"
         user_prompt += "Кратко и дружелюбно подтверди находку."
@@ -388,13 +431,15 @@ def generate_final_answer(query, search_phrases, found_files):
         system_prompt = """Ты — дружелюбный ассистент файлового архива.
 Отвечай живо, по-человечески.
 Если ничего не найдено — скажи об этом вежливо."""
-        
         user_prompt = "Пользователь спросил: '" + query + "'\n\n"
         user_prompt += "Ничего не нашёл. Вежливо скажи об этом."
     
     return call_gigachat(system_prompt, user_prompt, temperature=0.5)
 
 
+# ============================================================
+# РЕНДЕРИНГ КНОПОК СКАЧИВАНИЯ
+# ============================================================
 def render_download_buttons(files, prefix=""):
     for idx, filename in enumerate(files):
         filepath = os.path.join(DOCS_DIR, filename)
@@ -403,13 +448,16 @@ def render_download_buttons(files, prefix=""):
         if os.path.exists(filepath):
             with open(filepath, "rb") as f:
                 st.download_button(
-                    label=" Скачать: " + filename,
+                    label="📥 Скачать: " + filename,
                     data=f.read(),
                     file_name=os.path.basename(filename),
                     key=key
                 )
 
 
+# ============================================================
+# ИСТОРИЯ ЧАТА
+# ============================================================
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -418,6 +466,9 @@ for idx, msg in enumerate(st.session_state.messages):
         st.markdown(msg["content"])
 
 
+# ============================================================
+# ВВОД ПОЛЬЗОВАТЕЛЯ
+# ============================================================
 if q := st.chat_input("Например: помоги найти отчёт по продажам..."):
     st.session_state.messages.append({"role": "user", "content": q})
     with st.chat_message("user"):
@@ -425,16 +476,17 @@ if q := st.chat_input("Например: помоги найти отчёт по
 
     with st.chat_message("assistant"):
         try:
-            with st.spinner(" Анализирую запрос и ищу файлы..."):
+            with st.spinner("🔍 Анализирую запрос и ищу файлы..."):
                 search_phrases, found_files, debug_text = smart_search(q)
-                answer_text = generate_final_answer(q, search_phrases, found_files)
+                all_files = get_all_files_recursive()
+                answer_text = generate_final_answer(q, search_phrases, found_files, all_files)
             
             st.markdown(answer_text)
 
-            with st.expander("🔧 Отладка (как работал поиск)"):
+            with st.expander(" Отладка (как работал поиск)"):
                 st.code(debug_text, language="text")
                 st.markdown("**Все файлы в архиве:**")
-                st.markdown("\n".join(["- " + f for f in get_all_files_recursive()]))
+                st.markdown("\n".join(["- " + f for f in all_files]))
 
             if found_files:
                 st.markdown("---")
