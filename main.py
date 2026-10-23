@@ -40,8 +40,8 @@ if not client_id or not client_secret:
     st.error("Ошибка: Ключи GigaChat не найдены!")
     st.stop()
 
-st.set_page_config(page_title="ИИ Файловый Менеджер", page_icon="🗂️", layout="wide")
-st.title("🗂️ ИИ-Агент для поиска файлов")
+st.set_page_config(page_title="ИИ Файловый Менеджер", page_icon="️", layout="wide")
+st.title("️ ИИ-Агент для поиска файлов")
 st.write("Загрузите архив или файлы — я всё найду!")
 
 DOCS_DIR = "my_documents"
@@ -294,28 +294,92 @@ def call_gigachat(system_prompt, user_prompt, temperature=0.3):
 
 
 # ============================================================
-# АНАЛИЗ ЗАПРОСА ИИ
+# ШАГ 1: АНАЛИЗ ЗАПРОСА (классификация + извлечение ключей)
 # ============================================================
 def analyze_query_with_ai(query, files_list):
-    files_str = "\n".join(["- " + f for f in files_list]) if files_list else "(архив пуст)"
+    files_str = "\n".join(["- " + f for f in files_list[:20]]) if files_list else "(архив пуст)"
+    if len(files_list) > 20:
+        files_str += f"\n... и ещё {len(files_list) - 20} файлов"
     
-    system_prompt = """Ты — парсер поисковых запросов. Верни СТРОГО JSON-массив из 1-3 ключевых слов для поиска.
+    system_prompt = """Ты — аналитик поисковых запросов. Определи ТИП запроса и верни JSON.
 
-ПРАВИЛА:
-1. Отбрось служебные слова (привет, найди, покажи, мне, я, хочу, есть, какие, и, а, но, в, на, по).
-2. Оставь только слова из запроса пользователя в единственном числе.
-3. ЕСЛИ ЗАПРОС НА АНГЛИЙСКОМ — ОБЯЗАТЕЛЬНО ПЕРЕВЕДИ КЛЮЧЕВЫЕ СЛОВА НА РУССКИЙ.
-4. ЕСЛИ ПОЛЬЗОВАТЕЛЬ ПРОСИТ ПОКАЗАТЬ ВСЁ ("какие файлы есть", "покажи все"), верни ["все"].
-5. МАКСИМУМ 3 фразы. НЕ выдумывай синонимы, которых нет в запросе.
-6. Только JSON, без лишнего текста.
+ТИПЫ ЗАПРОСОВ:
+1. "simple" — простой поиск по словам (найди презентации, отчеты, документы)
+2. "filter" — сложный фильтр (вторая буква "е", файлы длиннее 5 символов, начинаются на "А")
+3. "all" — показать все файлы
+
+Верни JSON формата:
+{
+  "type": "simple" | "filter" | "all",
+  "keywords": ["слово1", "слово2"]  // только для типа "simple"
+}
 
 ПРИМЕРЫ:
-"найди презентации" → ["презентация", "pptx"]
-"отчет по продажам" → ["отчет", "продажа"]
-"какие файлы есть на сервере?" → ["все"]
-"find reports" → ["отчет"]"""
+"найди презентации" → {"type": "simple", "keywords": ["презентация", "pptx"]}
+"файлы где вторая буква е" → {"type": "filter", "keywords": []}
+"покажи все файлы" → {"type": "all", "keywords": []}
+"файлы длиннее 10 символов" → {"type": "filter", "keywords": []}
+"отчет по продажам" → {"type": "simple", "keywords": ["отчет", "продажа"]}
 
-    user_prompt = "Запрос: '" + query + "'\n\nФайлы в архиве:\n" + files_str + "\n\nВерни JSON (1-3 фразы):"
+ПРАВИЛА:
+1. Только JSON, без лишнего текста.
+2. Для "filter" keywords всегда пустой массив [].
+3. Для "all" keywords всегда пустой массив []."""
+
+    user_prompt = "Запрос: '" + query + "'\n\nФайлы в архиве (первые 20):\n" + files_str + "\n\nВерни JSON:"
+    
+    try:
+        response_text = call_gigachat(system_prompt, user_prompt, temperature=0.2)
+        
+        json_match = re.search(r'\{.*?\}', response_text, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(0)
+            result = json.loads(json_str)
+            
+            query_type = result.get("type", "simple")
+            keywords = result.get("keywords", [])
+            
+            if isinstance(keywords, list) and len(keywords) > 0:
+                keywords = [str(k).strip().lower() for k in keywords if isinstance(k, str) and len(str(k).strip()) >= 2]
+                keywords = keywords[:3]
+            
+            return query_type, keywords
+    except Exception as e:
+        print("⚠️ Ошибка парсинга JSON: " + str(e))
+    
+    # Fallback: считаем простым поиском
+    return "simple", [query.lower().strip()]
+
+
+# ============================================================
+# ШАГ 2: ИИ-ФИЛЬТРАЦИЯ (для сложных запросов)
+# ============================================================
+def filter_files_with_ai(query, files_list):
+    """ИИ фильтрует файлы по сложному критерию из запроса."""
+    
+    if not files_list:
+        return []
+    
+    files_str = "\n".join(files_list)
+    
+    system_prompt = """Ты — фильтр файлов. Проанализируй запрос пользователя и верни СПИСОК файлов, которые ему подходят.
+
+Верни JSON-массив строк (имена файлов). Если ни один файл не подходит — верни пустой массив [].
+
+ПРИМЕРЫ:
+Запрос: "файлы где вторая буква в названии е"
+Файлы: ["тест.txt", "файл1.txt", "закон.pdf"]
+Ответ: ["тест.txt"]  (в слове "тест" вторая буква "е")
+
+Запрос: "файлы длиннее 10 символов"
+Файлы: ["короткий.txt", "очень_длинное_название.txt"]
+Ответ: ["очень_длинное_название.txt"]
+
+Запрос: "файлы начинающиеся на букву з"
+Файлы: ["закон.txt", "отчет.pdf", "заметка.doc"]
+Ответ: ["закон.txt", "заметка.doc"]"""
+
+    user_prompt = "Запрос пользователя: '" + query + "'\n\nСписок всех файлов:\n" + files_str + "\n\nВерни JSON-массив подходящих файлов:"
     
     try:
         response_text = call_gigachat(system_prompt, user_prompt, temperature=0.3)
@@ -323,21 +387,23 @@ def analyze_query_with_ai(query, files_list):
         json_match = re.search(r'\[.*?\]', response_text, re.DOTALL)
         if json_match:
             json_str = json_match.group(0)
-            keywords = json.loads(json_str)
-            if isinstance(keywords, list) and len(keywords) > 0:
-                result = [str(k).strip().lower() for k in keywords if isinstance(k, str) and len(str(k).strip()) >= 2]
-                return result[:3]
+            filtered = json.loads(json_str)
+            
+            if isinstance(filtered, list):
+                # Проверяем, что файлы реально существуют
+                result = []
+                for f in filtered:
+                    if f in files_list:
+                        result.append(f)
+                return result
     except Exception as e:
-        print("⚠️ Ошибка парсинга JSON: " + str(e))
+        print("⚠️ Ошибка ИИ-фильтрации: " + str(e))
     
-    stop_words = {"привет", "помоги", "найди", "найти", "покажи", "мне", "я", "хочу", "чтобы", "ты", "есть", "какие", "и", "а", "но", "в", "на", "по"}
-    query_clean = re.sub(r'[^\w\s\-_а-яё]', ' ', query.lower().replace('ё', 'е'))
-    words = [w for w in query_clean.split() if len(w) >= 2 and w not in stop_words]
-    return words[:3] if words else [query.lower().strip().replace('ё', 'е')]
+    return []
 
 
 # ============================================================
-# УМНЫЙ ПОИСК (с обработкой общих запросов)
+# ШАГ 3: УМНЫЙ ПОИСК (с тремя режимами)
 # ============================================================
 def smart_search(query):
     files_list = get_all_files_recursive()
@@ -348,76 +414,89 @@ def smart_search(query):
     debug_info = []
     debug_info.append("📁 Всего файлов в архиве: " + str(len(files_list)))
     
-    # ✅ Проверка на общий запрос (ДОБАВЛЕНЫ НОВЫЕ ФРАЗЫ)
-    query_lower = normalize_text(query)
-    general_request_words = [
-        "все", "всё", "полный", "весь", "любой", "каждый",
-        "все файлы", "всё что", "что есть", "покажи все",
-        "показать все", "выведи все", "список", "полный список",
-        "что у тебя есть", "что имеется", "все документы",
-        "какие файлы", "файлы есть", "на сервере", "список файлов", "перечень"
-    ]
-    is_general_request = any(word in query_lower for word in general_request_words)
-    
-    if is_general_request:
-        debug_info.append("🌐 Общий запрос — возвращаем ВСЕ файлы")
-        return ["все"], files_list, "\n".join(debug_info)
-    
-    # Обычный поиск через ИИ
-    search_phrases = analyze_query_with_ai(query, files_list)
-    debug_info.append("🤖 ИИ предложил фразы: " + ", ".join(search_phrases))
+    # Шаг 1: Определяем тип запроса
+    query_type, keywords = analyze_query_with_ai(query, files_list)
+    debug_info.append("🤖 Тип запроса: " + query_type)
     
     all_found = []
-    for phrase in search_phrases:
-        variants = get_word_variants(phrase)
-        debug_info.append("🔍 Ищем '" + phrase + "' → варианты: " + ", ".join(variants))
-        
-        found = search_by_keyword(phrase)
-        if found:
-            debug_info.append("   ✅ Найдено: " + ", ".join(found))
-        else:
-            debug_info.append("   ❌ Не найдено")
-        
-        for f in found:
-            if f not in all_found:
-                all_found.append(f)
     
-    # Fallback-поиск, если ничего не нашли
-    if not all_found:
-        debug_info.append("⚠️ Ничего не нашли, делаем fallback-поиск...")
-        stop_words = {"привет", "помоги", "найди", "найти", "покажи", "мне", "я", "хочу", "чтобы", "ты", "есть", "какие", "и", "а", "но", "в", "на", "по", "с", "из", "от", "до", "за", "к", "у"}
-        query_clean = re.sub(r'[^\w\s\-_а-яё]', ' ', query.lower().replace('ё', 'е'))
-        fallback_words = [w for w in query_clean.split() if len(w) >= 2 and w not in stop_words]
+    # Шаг 2: Обрабатываем в зависимости от типа
+    if query_type == "all":
+        debug_info.append("🌐 Общий запрос — возвращаем ВСЕ файлы")
+        all_found = files_list.copy()
+    
+    elif query_type == "filter":
+        debug_info.append("🔍 Сложный фильтр — используем ИИ-фильтрацию")
+        debug_info.append("   Запрос: " + query)
+        all_found = filter_files_with_ai(query, files_list)
+        if all_found:
+            debug_info.append("   ✅ Найдено через ИИ: " + str(len(all_found)) + " файлов")
+        else:
+            debug_info.append("   ❌ ИИ ничего не нашёл")
+    
+    else:  # simple
+        debug_info.append("🔤 Простой поиск по ключевым словам: " + ", ".join(keywords))
         
-        for word in fallback_words:
-            variants = get_word_variants(word)
-            debug_info.append("  Fallback: ищем '" + word + "' → варианты: " + ", ".join(variants))
+        for phrase in keywords:
+            variants = get_word_variants(phrase)
+            debug_info.append("   📌 Ищем '" + phrase + "' → варианты: " + ", ".join(variants))
             
-            found = search_by_keyword(word)
+            found = search_by_keyword(phrase)
             if found:
-                debug_info.append("   ✅ Найдено: " + ", ".join(found))
+                debug_info.append("      ✅ Найдено: " + ", ".join(found))
+            else:
+                debug_info.append("      ❌ Не найдено")
             
             for f in found:
                 if f not in all_found:
                     all_found.append(f)
+        
+        # Fallback, если ничего не нашли
+        if not all_found:
+            debug_info.append("⚠️ Ничего не нашли, делаем fallback-поиск...")
+            stop_words = {"привет", "помоги", "найди", "найти", "покажи", "мне", "я", "хочу", "чтобы", "ты", "есть", "какие", "и", "а", "но", "в", "на", "по", "с", "из", "от", "до", "за", "к", "у"}
+            query_clean = re.sub(r'[^\w\s\-_а-яё]', ' ', query.lower().replace('ё', 'е'))
+            fallback_words = [w for w in query_clean.split() if len(w) >= 2 and w not in stop_words]
+            
+            for word in fallback_words:
+                variants = get_word_variants(word)
+                debug_info.append("   Fallback: ищем '" + word + "' → варианты: " + ", ".join(variants))
+                
+                found = search_by_keyword(word)
+                if found:
+                    debug_info.append("      ✅ Найдено: " + ", ".join(found))
+                
+                for f in found:
+                    if f not in all_found:
+                        all_found.append(f)
     
     debug_text = "\n".join(debug_info)
     
-    return search_phrases, all_found, debug_text
+    return [query_type], all_found, debug_text
 
 
 # ============================================================
-# ГЕНЕРАЦИЯ ОТВЕТА
+# ШАГ 4: ГЕНЕРАЦИЯ ОТВЕТА
 # ============================================================
 def generate_final_answer(query, search_phrases, found_files, all_files):
-    is_general_request = (search_phrases == ["все"])
+    query_type = search_phrases[0] if search_phrases else "simple"
     
-    if is_general_request:
+    if query_type == "all":
         files_str = "\n".join(["- " + f for f in found_files])
         system_prompt = """Ты — дружелюбный ассистент файлового архива.
 Отвечай живо, по-человечески, можешь использовать эмодзи.
 Пользователь попросил показать ВСЕ файлы. Перечисли их и скажи общее количество."""
         user_prompt = "В архиве " + str(len(found_files)) + " файл(ов):\n" + files_str + "\n\nКратко и дружелюбно перечисли все файлы."
+    
+    elif query_type == "filter":
+        files_str = "\n".join(["- " + f for f in found_files])
+        system_prompt = """Ты — дружелюбный ассистент файлового архива.
+Отвечай живо, по-человечески, можешь использовать эмодзи.
+Пользователь задал сложный критерий поиска. Подтверди, что нашёл файлы, и перечисли их."""
+        user_prompt = "Пользователь спросил: '" + query + "'\n\n"
+        user_prompt += "Нашёл " + str(len(found_files)) + " файл(ов), подходящих под критерий:\n" + files_str + "\n\n"
+        user_prompt += "Кратко и дружелюбно подтверди находку."
+    
     elif found_files:
         files_str = "\n".join(["- " + f for f in found_files])
         system_prompt = """Ты — дружелюбный ассистент файлового архива.
