@@ -41,7 +41,7 @@ if not client_id or not client_secret:
     st.stop()
 
 st.set_page_config(page_title="ИИ Файловый Менеджер", page_icon="🗂️", layout="wide")
-st.title("️ ИИ-Агент для поиска файлов")
+st.title("🗂️ ИИ-Агент для поиска файлов")
 st.write("Загрузите архив или файлы — я всё найду!")
 
 DOCS_DIR = "my_documents"
@@ -71,12 +71,12 @@ if not st.session_state.is_admin:
 else:
     st.sidebar.success("✅ Вы вошли как администратор")
 
-    if st.sidebar.button(" Выйти"):
+    if st.sidebar.button("🚪 Выйти"):
         st.session_state.is_admin = False
         st.rerun()
 
     st.sidebar.markdown("---")
-    st.sidebar.header(" Загрузка файлов и архивов")
+    st.sidebar.header("📤 Загрузка файлов и архивов")
     st.sidebar.info("Поддерживаются: ZIP, TAR, TAR.GZ, RAR, 7Z, а также обычные файлы")
 
     uploaded_files = st.sidebar.file_uploader(
@@ -123,7 +123,7 @@ else:
                         extracted_count = len(sz_ref.getnames())
                     os.remove(filepath)
                 except ImportError:
-                    st.sidebar.warning("️ Для 7Z нужна библиотека py7zr")
+                    st.sidebar.warning("⚠️ Для 7Z нужна библиотека py7zr")
                     return 0
             
             if extracted_count > 0:
@@ -294,7 +294,7 @@ def call_gigachat(system_prompt, user_prompt, temperature=0.3):
 
 
 # ============================================================
-# АНАЛИЗ ЗАПРОСА ИИ (МАКСИМУМ 3 ФРАЗЫ)
+# АНАЛИЗ ЗАПРОСА ИИ
 # ============================================================
 def analyze_query_with_ai(query, files_list):
     files_str = "\n".join(["- " + f for f in files_list]) if files_list else "(архив пуст)"
@@ -305,17 +305,15 @@ def analyze_query_with_ai(query, files_list):
 1. Отбрось служебные слова (привет, найди, покажи, мне, я, хочу, есть, какие, и, а, но, в, на, по).
 2. Оставь только слова из запроса пользователя в единственном числе.
 3. ЕСЛИ ЗАПРОС НА АНГЛИЙСКОМ — ОБЯЗАТЕЛЬНО ПЕРЕВЕДИ КЛЮЧЕВЫЕ СЛОВА НА РУССКИЙ.
-4. МАКСИМУМ 3 фразы. НЕ выдумывай синонимы, которых нет в запросе.
-5. Добавляй расширения файлов (pptx, xlsx, pdf) только если они ОЧЕВИДНО подразумеваются.
+4. ЕСЛИ ПОЛЬЗОВАТЕЛЬ ПРОСИТ ПОКАЗАТЬ ВСЁ ("какие файлы есть", "покажи все"), верни ["все"].
+5. МАКСИМУМ 3 фразы. НЕ выдумывай синонимы, которых нет в запросе.
 6. Только JSON, без лишнего текста.
 
 ПРИМЕРЫ:
 "найди презентации" → ["презентация", "pptx"]
 "отчет по продажам" → ["отчет", "продажа"]
-"текстовые файлы" → ["текстовый файл", "txt"]
-"закон Ньютона" → ["закон", "ньютон"]
-"find reports" → ["отчет"]
-"show me presentations" → ["презентация"]"""
+"какие файлы есть на сервере?" → ["все"]
+"find reports" → ["отчет"]"""
 
     user_prompt = "Запрос: '" + query + "'\n\nФайлы в архиве:\n" + files_str + "\n\nВерни JSON (1-3 фразы):"
     
@@ -350,19 +348,20 @@ def smart_search(query):
     debug_info = []
     debug_info.append("📁 Всего файлов в архиве: " + str(len(files_list)))
     
-    # ✅ Проверка на общий запрос ("покажи все", "что есть" и т.д.)
+    # ✅ Проверка на общий запрос (ДОБАВЛЕНЫ НОВЫЕ ФРАЗЫ)
     query_lower = normalize_text(query)
     general_request_words = [
         "все", "всё", "полный", "весь", "любой", "каждый",
         "все файлы", "всё что", "что есть", "покажи все",
         "показать все", "выведи все", "список", "полный список",
-        "что у тебя есть", "что имеется", "все документы"
+        "что у тебя есть", "что имеется", "все документы",
+        "какие файлы", "файлы есть", "на сервере", "список файлов", "перечень"
     ]
     is_general_request = any(word in query_lower for word in general_request_words)
     
     if is_general_request:
         debug_info.append("🌐 Общий запрос — возвращаем ВСЕ файлы")
-        return ["все файлы"], files_list, "\n".join(debug_info)
+        return ["все"], files_list, "\n".join(debug_info)
     
     # Обычный поиск через ИИ
     search_phrases = analyze_query_with_ai(query, files_list)
@@ -411,7 +410,7 @@ def smart_search(query):
 # ГЕНЕРАЦИЯ ОТВЕТА
 # ============================================================
 def generate_final_answer(query, search_phrases, found_files, all_files):
-    is_general_request = (search_phrases == ["все файлы"])
+    is_general_request = (search_phrases == ["все"])
     
     if is_general_request:
         files_str = "\n".join(["- " + f for f in found_files])
@@ -483,7 +482,7 @@ if q := st.chat_input("Например: помоги найти отчёт по
             
             st.markdown(answer_text)
 
-            with st.expander(" Отладка (как работал поиск)"):
+            with st.expander("🔧 Отладка (как работал поиск)"):
                 st.code(debug_text, language="text")
                 st.markdown("**Все файлы в архиве:**")
                 st.markdown("\n".join(["- " + f for f in all_files]))
